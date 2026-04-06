@@ -1,0 +1,6 @@
+{
+  "scripts": {
+    "deploy:worker": "cd worker && npm run deploy",
+    "dev:worker": "cd worker && npm run dev"
+  }
+}
