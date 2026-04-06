@@ -1,0 +1,42 @@
+
+> debatelive-api@1.0.0 dev
+> wrangler dev
+
+
+ ⛅️ wrangler 3.114.17 (update available 4.80.0)
+-----------------------------------------------
+
+[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mThe version of Wrangler you are using is now out-of-date.[0m
+
+  Please update to the latest version to prevent critical errors.
+  Run `npm install --save-dev wrangler@4` to update to the latest version.
+  After installation, run Wrangler with `npx wrangler`.
+
+
+Using vars defined in .dev.vars
+Your Worker and resources are simulated locally via Miniflare. For more information, see: https://developers.cloudflare.com/workers/testing/local-development.
+
+Your worker has access to the following bindings:
+- KV Namespaces:
+  - LOGIN_ATTEMPTS: 8d664529f8364717a0878621ef48f2d8 [simulated locally]
+- Vars:
+  - ENVIRONMENT: "development"
+  - WORKER_URL: "http://localhost:8788"
+  - SUPABASE_URL: "(hidden)"
+  - SUPABASE_SERVICE_KEY: "(hidden)"
+  - FIREBASE_PROJECT_ID: "(hidden)"
+  - GEMINI_API_KEY: "(hidden)"
+  - INTERNAL_SECRET: "(hidden)"
+⎔ Starting local server...
+[wrangler:inf] Ready on http://localhost:8788
+[wrangler:inf] GET /health 200 OK (103ms)
+[31m✘ [41;31m[[41;97mERROR[41;31m][0m [1mConstructing a Response with a null body status (204) and a non-null, zero-length body. This is technically incorrect, and we recommend you update your code to explicitly pass in a `null` body, e.g. `new Response(null, { status: 204, ... })`. (We continue to allow the zero-length body behavior because it was previously the only way to construct a Response with a null body status. This behavior may change in the future.)[0m
+
+
+[wrangler:inf] OPTIONS /api/auth/register 204 No Content (3ms)
+[wrangler:inf] POST /api/auth/check-ban 200 OK (2ms)
+[wrangler:inf] POST /api/auth/check-ban 200 OK (2ms)
+[wrangler:inf] GET /nonexistent 404 Not Found (3ms)
+[wrangler:inf] POST /api/auth/register 401 Unauthorized (5ms)
+[wrangler:inf] POST /api/auth/register 401 Unauthorized (3ms)
+🪵  Logs were written to "/home/hiroaki/.config/.wrangler/logs/wrangler-2026-04-03_07-17-58_950.log"

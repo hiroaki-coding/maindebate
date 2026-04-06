@@ -1,0 +1,40 @@
+name = "debatelive-api"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+ENVIRONMENT = "development"
+WORKER_URL = "http://localhost:8788"
+
+# 開発サーバー設定
+[dev]
+port = 8788
+
+# KV（ログイン試行回数管理）
+[[kv_namespaces]]
+binding = "LOGIN_ATTEMPTS"
+id = "8d664529f8364717a0878621ef48f2d8"
+
+# Durable Objects（未実装のためコメントアウト）
+# [[durable_objects.bindings]]
+# name = "DEBATE_ROOM"
+# class_name = "DebateRoom"
+
+# [[migrations]]
+# tag = "v1"
+# new_classes = ["DebateRoom"]
+
+# 本番環境
+[env.production]
+vars = { ENVIRONMENT = "production", WORKER_URL = "https://api.debatelive.example.com" }
+
+# シークレット（wrangler secret putで設定）
+# - SUPABASE_URL
+# - SUPABASE_SERVICE_KEY
+# - FIREBASE_PROJECT_ID
+# - GEMINI_API_KEY
+# - INTERNAL_SECRET
+# - TURNSTILE_SECRET_KEY
+# - ADMIN_PANEL_PASSWORD
+# - ADMIN_TOTP_SECRET

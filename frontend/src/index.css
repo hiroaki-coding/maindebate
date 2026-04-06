@@ -1,0 +1,223 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-pro: #D93025;
+  --color-rank-gold: #FFD700;
+  --color-pro-bg: #FDE8E7;
+  --color-con: #555555;
+  --color-con-bg: #F0F0F0;
+  --color-pro-hover: #B71C1C;
+  --border-radius-card: 12px;
+  --border-radius-badge: 20px;
+  --transition-default: 0.15s ease-out;
+  --transition-slide: 0.35s ease-in-out;
+  --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', 'Noto Sans JP', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #F9F9F9;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.line-clamp-2 {
+  line-clamp: 2;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.home-live-card:hover {
+  box-shadow: var(--shadow-card-hover);
+  transform: translateY(-2px);
+}
+
+@keyframes live-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.live-dot {
+  animation: live-blink 1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot {
+    animation: none;
+  }
+}
+
+/* カスタムユーティリティ */
+@layer components {
+  .btn-primary {
+    @apply bg-primary text-white font-medium py-3 px-6 rounded-lg
+           hover:bg-primary-hover transition-colors duration-200
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply bg-white text-text-primary font-medium py-3 px-6 rounded-lg
+           border border-border-color hover:bg-bg-secondary
+           transition-colors duration-200;
+  }
+
+  .btn-google {
+    @apply flex items-center justify-center gap-3 w-full py-3 px-6
+           bg-white border border-border-color rounded-lg font-medium
+           text-text-primary hover:bg-bg-secondary transition-colors duration-200;
+  }
+
+  .input-field {
+    @apply w-full px-4 py-3 border border-border-color rounded-lg
+           focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary
+           placeholder:text-text-tertiary transition-colors duration-200;
+  }
+
+  .input-error {
+    @apply border-error focus:border-error focus:ring-error;
+  }
+
+  .card {
+    @apply bg-white rounded-xl shadow-card p-8;
+  }
+
+  .link {
+    @apply text-primary hover:text-primary-hover underline transition-colors;
+  }
+}
+
+@layer utilities {
+  .animate-spin-slow {
+    animation: spin 2.4s linear infinite;
+  }
+
+  .animate-pulse-soft {
+    animation: pulse-soft 1.6s ease-in-out infinite;
+  }
+
+  .animate-opponent-reveal {
+    animation: opponent-reveal 700ms ease-out;
+  }
+
+  .animate-ring-flash {
+    animation: ring-flash 950ms ease-out;
+  }
+
+  .animate-noise-fade {
+    animation: noise-fade 360ms steps(3) 2;
+  }
+}
+
+@keyframes pulse-soft {
+  0%,
+  100% {
+    transform: scale(0.97);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.03);
+    opacity: 1;
+  }
+}
+
+@keyframes opponent-reveal {
+  0% {
+    filter: blur(6px) contrast(1.4);
+    transform: scale(0.88);
+  }
+  45% {
+    filter: blur(2px) contrast(1.3);
+    transform: scale(1.03);
+  }
+  100% {
+    filter: blur(0);
+    transform: scale(1);
+  }
+}
+
+@keyframes ring-flash {
+  0% {
+    box-shadow: 0 0 0 rgba(255, 0, 0, 0);
+    transform: scale(1);
+  }
+  25% {
+    box-shadow: 0 0 0 12px rgba(255, 0, 0, 0.2), 0 0 25px rgba(255, 0, 0, 0.35);
+    transform: scale(1.12);
+  }
+  100% {
+    box-shadow: 0 0 0 rgba(255, 0, 0, 0);
+    transform: scale(1);
+  }
+}
+
+@keyframes noise-fade {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0.95;
+  }
+  100% {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes ticker-slide {
+  from {
+    transform: translateX(-100%);
+    opacity: 0.7;
+  }
+  to {
+    transform: translateX(var(--ticker-end, 110vw));
+    opacity: 0.7;
+  }
+}
+
+.feed-ticker-item {
+  animation-name: ticker-slide;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .feed-ticker-item {
+    animation: none;
+    transform: none;
+  }
+}

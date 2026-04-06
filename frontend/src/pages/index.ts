@@ -1,0 +1,10 @@
+export { LoginPage } from './Login';
+export { RegisterPage } from './Register';
+export { VerifyEmailPage } from './VerifyEmail';
+export { CompleteProfilePage } from './CompleteProfile';
+export { MatchingPage } from './Matching';
+export { DebateRoomPage } from './DebateRoom';
+export { HomePage } from './Home';
+export { SlideFeedPage } from './SlideFeed';
+export { UserProfilePage } from './UserProfile';
+export { AdminDashboardPage } from './AdminDashboard';
