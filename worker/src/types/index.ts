@@ -2,6 +2,7 @@ export interface Env {
   // 環境変数
   ENVIRONMENT: string;
   NODE_ENV?: string;
+  ENABLE_TEMP_CORS_DOMAINS?: string;
   WORKER_URL: string;
   SUPABASE_URL?: string;
   SUPABASE_SERVICE_KEY?: string;

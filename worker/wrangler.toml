@@ -6,6 +6,7 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 ENVIRONMENT = "development"
 WORKER_URL = "http://localhost:8788"
+ENABLE_TEMP_CORS_DOMAINS = "true"
 
 # 開発サーバー設定
 [dev]
@@ -27,7 +28,7 @@ id = "8d664529f8364717a0878621ef48f2d8"
 
 # 本番環境
 [env.production]
-vars = { ENVIRONMENT = "production", WORKER_URL = "https://api.debatelive.example.com" }
+vars = { ENVIRONMENT = "production", WORKER_URL = "https://api.debatelive.example.com", ENABLE_TEMP_CORS_DOMAINS = "false" }
 
 # シークレット（wrangler secret putで設定）
 # - SUPABASE_URL
