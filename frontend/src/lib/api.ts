@@ -6,6 +6,7 @@ interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
   requireAuth?: boolean;
+  optionalAuth?: boolean;
   headers?: Record<string, string>;
 }
 
@@ -29,18 +30,21 @@ export class ApiError extends Error {
 }
 
 async function request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, requireAuth = false, headers: customHeaders } = options;
+  const { method = 'GET', body, requireAuth = false, optionalAuth = false, headers: customHeaders } = options;
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
 
-  if (requireAuth) {
+  if (requireAuth || optionalAuth) {
     const token = await getIdToken();
-    if (!token) {
+    if (!token && requireAuth) {
       throw new ApiError('認証が必要です', 401, 'UNAUTHORIZED');
     }
-    headers['Authorization'] = `Bearer ${token}`;
+
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
   }
 
   if (customHeaders) {
@@ -283,10 +287,10 @@ export interface DebateTick {
 
 export const debateApi = {
   getSnapshot: (debateId: string) =>
-    request<DebateSnapshot>(`/api/debates/${debateId}/snapshot`),
+    request<DebateSnapshot>(`/api/debates/${debateId}/snapshot`, { optionalAuth: true }),
 
   tick: (debateId: string) =>
-    request<DebateTick>(`/api/debates/${debateId}/tick`),
+    request<DebateTick>(`/api/debates/${debateId}/tick`, { optionalAuth: true }),
 
   heartbeat: (debateId: string) =>
     request<{ ok: boolean }>(`/api/debates/${debateId}/heartbeat`, {
