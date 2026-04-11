@@ -11,26 +11,7 @@ type AuthContext = Context<{
   };
 }>;
 
-function isDevelopmentAuthMode(env: Env): boolean {
-  const mode = (env.NODE_ENV ?? env.ENVIRONMENT ?? '').toLowerCase();
-  return mode === 'development' || mode === 'dev' || mode === 'local' || mode === 'test';
-}
-
-function parseJwtPayload(token: string): Record<string, unknown> | null {
-  const parts = token.split('.');
-  if (parts.length !== 3) return null;
-
-  try {
-    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), '=');
-    const decoded = atob(padded);
-    return JSON.parse(decoded) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-// 開発環境用のシンプルな認証ミドルウェア
+// 必須認証ミドルウェア
 export async function authRequired(c: AuthContext, next: Next): Promise<Response | void> {
   const authHeader = c.req.header('Authorization');
   if (!authHeader?.startsWith('Bearer ')) {
@@ -38,33 +19,22 @@ export async function authRequired(c: AuthContext, next: Next): Promise<Response
   }
 
   const token = authHeader.slice(7);
-  let firebaseUid: string | null = null;
-  const developmentMode = isDevelopmentAuthMode(c.env);
 
-  // 本番系では署名検証必須。検証不能/失敗は即401。
-  if (!developmentMode && !c.env.FIREBASE_PROJECT_ID) {
+  if (!c.env.FIREBASE_PROJECT_ID) {
     return c.json({ error: '認証設定が不正です' }, 500);
   }
 
-  try {
-    if (c.env.FIREBASE_PROJECT_ID) {
-      const verified = await verifyFirebaseToken(token, c.env.FIREBASE_PROJECT_ID) as unknown as {
-        uid?: string;
-        sub?: string;
-        user_id?: string;
-      };
-      firebaseUid = verified.uid ?? verified.user_id ?? verified.sub ?? null;
-    }
-  } catch {
-    if (!developmentMode) {
-      return c.json({ error: '無効なトークンです' }, 401);
-    }
-  }
+  let firebaseUid: string | null = null;
 
-  if (!firebaseUid && developmentMode) {
-    const payload = parseJwtPayload(token);
-    const fromPayload = payload?.sub ?? payload?.user_id ?? payload?.uid;
-    firebaseUid = typeof fromPayload === 'string' ? fromPayload : null;
+  try {
+    const verified = await verifyFirebaseToken(token, c.env.FIREBASE_PROJECT_ID) as unknown as {
+      uid?: string;
+      sub?: string;
+      user_id?: string;
+    };
+    firebaseUid = verified.uid ?? verified.user_id ?? verified.sub ?? null;
+  } catch {
+    return c.json({ error: '無効なトークンです' }, 401);
   }
 
   if (!firebaseUid) {
@@ -107,33 +77,28 @@ export async function authRequired(c: AuthContext, next: Next): Promise<Response
   await next();
 }
 
-// 認証任意ミドルウェア（開発用）
+// 認証任意ミドルウェア
 export async function authOptional(c: AuthContext, next: Next) {
   const authHeader = c.req.header('Authorization');
   c.set('user', null);
-  const developmentMode = isDevelopmentAuthMode(c.env);
 
   if (authHeader?.startsWith('Bearer ')) {
+    if (!c.env.FIREBASE_PROJECT_ID) {
+      return c.json({ error: '認証設定が不正です' }, 500);
+    }
+
     const token = authHeader.slice(7);
     let firebaseUid: string | null = null;
 
     try {
-      if (c.env.FIREBASE_PROJECT_ID) {
-        const verified = await verifyFirebaseToken(token, c.env.FIREBASE_PROJECT_ID) as unknown as {
-          uid?: string;
-          sub?: string;
-          user_id?: string;
-        };
-        firebaseUid = verified.uid ?? verified.user_id ?? verified.sub ?? null;
-      }
+      const verified = await verifyFirebaseToken(token, c.env.FIREBASE_PROJECT_ID) as unknown as {
+        uid?: string;
+        sub?: string;
+        user_id?: string;
+      };
+      firebaseUid = verified.uid ?? verified.user_id ?? verified.sub ?? null;
     } catch {
       // optional authでは検証失敗時に未認証のまま続行する
-    }
-
-    if (!firebaseUid && developmentMode) {
-      const payload = parseJwtPayload(token);
-      const fromPayload = payload?.sub ?? payload?.user_id ?? payload?.uid;
-      firebaseUid = typeof fromPayload === 'string' ? fromPayload : null;
     }
 
     if (firebaseUid) {
@@ -166,7 +131,7 @@ export async function authOptional(c: AuthContext, next: Next) {
   await next();
 }
 
-// 管理者専用ミドルウェア（開発用）
+// 管理者専用ミドルウェア
 export async function adminRequired(c: AuthContext, next: Next): Promise<Response | void> {
   const authResult = await authRequired(c, async () => {});
   if (authResult) return authResult;

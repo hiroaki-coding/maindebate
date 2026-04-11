@@ -17,14 +17,14 @@ port = 8788
 binding = "LOGIN_ATTEMPTS"
 id = "8d664529f8364717a0878621ef48f2d8"
 
-# Durable Objects（未実装のためコメントアウト）
-# [[durable_objects.bindings]]
-# name = "DEBATE_ROOM"
-# class_name = "DebateRoom"
+# Durable Objects
+[[durable_objects.bindings]]
+name = "DEBATE_ROOM"
+class_name = "DebateRoom"
 
-# [[migrations]]
-# tag = "v1"
-# new_classes = ["DebateRoom"]
+[[migrations]]
+tag = "v1"
+new_classes = ["DebateRoom"]
 
 # 本番環境
 [env.production]

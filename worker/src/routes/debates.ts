@@ -118,6 +118,53 @@ const app = new Hono<{ Bindings: Env; Variables: { user: AuthUser | null; fireba
 const getSupabase = (env: Env) => createClient(env.SUPABASE_URL!, env.SUPABASE_SERVICE_KEY!);
 const hasSupabaseConfig = (env: Env) => Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_KEY);
 
+type RealtimeEventPayload = {
+  type: 'state:update' | 'timer:update' | 'message:new' | 'vote:update' | 'comment:new' | 'heartbeat';
+  source?: string;
+  payload?: Record<string, unknown>;
+  status?: DebateStatus;
+  currentTurn?: DebateSide | null;
+  turnNumber?: number;
+};
+
+function getDebateRoomStub(env: Env, debateId: string): DurableObjectStub | null {
+  if (!env.DEBATE_ROOM) return null;
+  const id = env.DEBATE_ROOM.idFromName(debateId);
+  return env.DEBATE_ROOM.get(id);
+}
+
+async function publishRealtimeEvent(env: Env, debateId: string, event: RealtimeEventPayload): Promise<void> {
+  const stub = getDebateRoomStub(env, debateId);
+  if (!stub) return;
+
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (env.INTERNAL_SECRET) {
+    headers['x-internal-secret'] = env.INTERNAL_SECRET;
+  }
+
+  try {
+    const res = await stub.fetch('https://debate-room/events', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(event),
+    });
+
+    if (!res.ok) {
+      console.warn('realtime event publish failed', {
+        debateId,
+        eventType: event.type,
+        status: res.status,
+      });
+    }
+  } catch (error) {
+    console.warn('realtime event publish error', {
+      debateId,
+      eventType: event.type,
+      error,
+    });
+  }
+}
+
 const MIN_MESSAGE_LEN = 10;
 const MAX_MESSAGE_LEN = 200;
 const MIN_COMMENT_LEN = 10;
@@ -1167,6 +1214,61 @@ async function buildSnapshotPayload(
   };
 }
 
+app.get('/:debateId/realtime/ws', authOptional, async (c) => {
+  const debateId = c.req.param('debateId');
+  if (!debateId) {
+    return c.json({ error: 'debateId is required' }, 400);
+  }
+
+  const stub = getDebateRoomStub(c.env, debateId);
+  if (!stub) {
+    return c.json({ error: 'Realtime room is not configured' }, 503);
+  }
+
+  const upgradeHeader = c.req.header('Upgrade');
+  if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
+    return c.json({ error: 'Expected websocket upgrade' }, 426);
+  }
+
+  const user = c.get('user');
+  const roomUrl = new URL('https://debate-room/connect');
+  roomUrl.searchParams.set('debateId', debateId);
+
+  if (typeof user?.userId === 'string') {
+    roomUrl.searchParams.set('userId', user.userId);
+  }
+  roomUrl.searchParams.set('role', user ? 'authenticated' : 'guest');
+
+  const req = new Request(roomUrl.toString(), {
+    method: 'GET',
+    headers: c.req.raw.headers,
+  });
+
+  return stub.fetch(req);
+});
+
+app.get('/:debateId/realtime/snapshot', authOptional, async (c) => {
+  const debateId = c.req.param('debateId');
+  if (!debateId) {
+    return c.json({ error: 'debateId is required' }, 400);
+  }
+
+  const stub = getDebateRoomStub(c.env, debateId);
+  if (!stub) {
+    return c.json({ error: 'Realtime room is not configured' }, 503);
+  }
+
+  const roomUrl = new URL('https://debate-room/snapshot');
+  roomUrl.searchParams.set('debateId', debateId);
+  const res = await stub.fetch(roomUrl.toString());
+  if (!res.ok) {
+    return c.json({ error: 'Failed to fetch realtime snapshot' }, 502);
+  }
+
+  const payload = await res.json();
+  return c.json(payload);
+});
+
 app.get('/:debateId/snapshot', authOptional, async (c) => {
   if (!hasSupabaseConfig(c.env)) {
     return c.json({ error: 'Supabase credentials are not configured' }, 500);
@@ -1193,6 +1295,13 @@ app.get('/:debateId/snapshot', authOptional, async (c) => {
 
     const { state, finalResult } = await advanceDebate(c.env, supabase, context);
     const payload = await buildSnapshotPayload(c.env, supabase, context, state, finalResult);
+    await publishRealtimeEvent(c.env, debateId, {
+      type: 'state:update',
+      source: 'snapshot',
+      status: state.status,
+      currentTurn: state.current_turn,
+      turnNumber: state.turn_number,
+    });
 
     return c.json(payload);
   } catch (error) {
@@ -1228,6 +1337,21 @@ app.get('/:debateId/tick', authOptional, async (c) => {
 
     const { state, finalResult } = await advanceDebate(c.env, supabase, context);
     const now = Date.now();
+
+    await publishRealtimeEvent(c.env, debateId, {
+      type: 'timer:update',
+      source: 'tick',
+      status: state.status,
+      currentTurn: state.current_turn,
+      turnNumber: state.turn_number,
+      payload: {
+        overallRemainingSec: calculateRemainingSec(state.started_at, context.debate.debate_duration_sec, now),
+        turnRemainingSec:
+          state.status === 'in_progress'
+            ? calculateRemainingSec(state.turn_started_at, context.debate.turn_duration_sec, now)
+            : 0,
+      },
+    });
 
     return c.json({
       status: state.status,
@@ -1272,6 +1396,11 @@ app.post('/:debateId/heartbeat', authRequired, async (c) => {
 
   try {
     await recordWatchHeartbeat(c.env, debateId, userId);
+    await publishRealtimeEvent(c.env, debateId, {
+      type: 'heartbeat',
+      source: 'heartbeat',
+      payload: { userId },
+    });
     return c.json({ ok: true });
   } catch (error) {
     console.error('Debate heartbeat error:', error);
@@ -1372,6 +1501,21 @@ app.post('/:debateId/message', authRequired, async (c) => {
       .eq('debate_id', debateId);
 
     if (stateError) throw new Error(stateError.message);
+
+    await publishRealtimeEvent(c.env, debateId, {
+      type: 'message:new',
+      source: 'message',
+      status: 'in_progress',
+      currentTurn: toggleSide(role),
+      turnNumber: state.turn_number + 1,
+      payload: {
+        id: inserted.id,
+        userId,
+        side: role,
+        content: inserted.content,
+        createdAt: inserted.created_at,
+      },
+    });
 
     return c.json({
       message: inserted,
@@ -1485,6 +1629,16 @@ app.post('/:debateId/vote', authRequired, async (c) => {
 
     if (stateError) throw new Error(stateError.message);
 
+    await publishRealtimeEvent(c.env, debateId, {
+      type: 'vote:update',
+      source: 'vote',
+      payload: {
+        votedSide,
+        proVotes: stateRaw?.pro_votes ?? 0,
+        conVotes: stateRaw?.con_votes ?? 0,
+      },
+    });
+
     return c.json({
       votedSide,
       proVotes: stateRaw?.pro_votes ?? 0,
@@ -1579,6 +1733,17 @@ app.post('/:debateId/comment', authRequired, async (c) => {
       .single();
 
     if (insertError) throw new Error(insertError.message);
+
+    await publishRealtimeEvent(c.env, debateId, {
+      type: 'comment:new',
+      source: 'comment',
+      payload: {
+        id: inserted.id,
+        userId,
+        content: inserted.content,
+        createdAt: inserted.created_at,
+      },
+    });
 
     return c.json({
       comment: inserted,

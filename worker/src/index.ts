@@ -10,8 +10,7 @@ import { homeRoutes } from './routes/home';
 import { adminRoutes } from './routes/admin';
 import { userRoutes } from './routes/users';
 
-// Durable Objects のエクスポート（後で実装）
-// export { DebateRoom } from './durable-objects/DebateRoom';
+export { DebateRoom } from './durable-objects/DebateRoom';
 
 const app = new Hono<{ Bindings: Env }>();
 

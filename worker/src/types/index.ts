@@ -14,7 +14,7 @@ export interface Env {
   ADMIN_TOTP_SECRET?: string;
 
   // Durable Objects
-  // DEBATE_ROOM?: DurableObjectNamespace;
+  DEBATE_ROOM?: DurableObjectNamespace;
 
   // KV
   LOGIN_ATTEMPTS: KVNamespace;
