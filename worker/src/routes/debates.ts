@@ -405,6 +405,12 @@ async function applyAutoHideIfNeeded(
   if (debateHideError) throw new Error(debateHideError.message);
 }
 
+function isMissingRelationError(error: { code?: string; message?: string } | null | undefined, relation: string): boolean {
+  if (!error) return false;
+  if (error.code === '42P01') return true;
+  return Boolean(error.message?.includes(`relation "${relation}" does not exist`));
+}
+
 async function recordWatchHeartbeat(
   supabase: ReturnType<typeof getSupabase>,
   debateId: string,
@@ -424,6 +430,11 @@ async function recordWatchHeartbeat(
     );
 
   if (error) {
+    if (isMissingRelationError(error, 'debate_watch_presence')) {
+      // Migration未適用環境では視聴者プレゼンスを無効化して継続する。
+      console.warn('debate_watch_presence table is missing; heartbeat persistence is skipped');
+      return;
+    }
     throw new Error(error.message);
   }
 }
@@ -438,6 +449,9 @@ async function getActiveViewerCount(supabase: ReturnType<typeof getSupabase>, de
     .gte('last_seen', cutoffIso);
 
   if (error) {
+    if (isMissingRelationError(error, 'debate_watch_presence')) {
+      return 0;
+    }
     throw new Error(error.message);
   }
 
