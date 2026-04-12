@@ -172,6 +172,8 @@ const MAX_COMMENT_LEN = 200;
 const COMMENT_RATE_LIMIT = 20;
 const VOTE_COOLDOWN_MS = 2000;
 const FINALIZE_TIMEOUT_MS = 10_000;
+const ACTIVE_VIEWER_WINDOW_MS = 45_000;
+const WATCH_BONUS_MARGIN_MS = 15_000;
 
 function voteThrottleKey(userId: string) {
   return `debate:vote:${userId}`;
@@ -179,10 +181,6 @@ function voteThrottleKey(userId: string) {
 
 function finalizeLockKey(debateId: string) {
   return `debate:finalize-lock:${debateId}`;
-}
-
-function watcherKey(debateId: string, userId: string) {
-  return `debate:watch:${debateId}:${userId}`;
 }
 
 function removeControlChars(input: string): string {
@@ -330,51 +328,43 @@ async function applyAutoHideIfNeeded(
   if (debateHideError) throw new Error(debateHideError.message);
 }
 
-async function recordWatchHeartbeat(env: Env, debateId: string, userId: string): Promise<void> {
-  const key = watcherKey(debateId, userId);
-  const now = Date.now();
-  const raw = await env.LOGIN_ATTEMPTS.get(key);
+async function recordWatchHeartbeat(
+  supabase: ReturnType<typeof getSupabase>,
+  debateId: string,
+  userId: string
+): Promise<void> {
+  const nowIso = new Date().toISOString();
 
-  if (!raw) {
-    const payload = { firstSeen: now, lastSeen: now };
-    await env.LOGIN_ATTEMPTS.put(key, JSON.stringify(payload), { expirationTtl: 86_400 });
-    return;
-  }
+  const { error } = await supabase
+    .from('debate_watch_presence')
+    .upsert(
+      {
+        debate_id: debateId,
+        user_id: userId,
+        last_seen: nowIso,
+      },
+      { onConflict: 'debate_id,user_id' }
+    );
 
-  try {
-    const parsed = JSON.parse(raw) as { firstSeen: number; lastSeen: number };
-    const payload = {
-      firstSeen: parsed.firstSeen,
-      lastSeen: now,
-    };
-    await env.LOGIN_ATTEMPTS.put(key, JSON.stringify(payload), { expirationTtl: 86_400 });
-  } catch {
-    const payload = { firstSeen: now, lastSeen: now };
-    await env.LOGIN_ATTEMPTS.put(key, JSON.stringify(payload), { expirationTtl: 86_400 });
+  if (error) {
+    throw new Error(error.message);
   }
 }
 
-async function getActiveViewerCount(env: Env, debateId: string): Promise<number> {
-  const list = await env.LOGIN_ATTEMPTS.list({ prefix: `debate:watch:${debateId}:`, limit: 1000 });
-  const now = Date.now();
-  let active = 0;
+async function getActiveViewerCount(supabase: ReturnType<typeof getSupabase>, debateId: string): Promise<number> {
+  const cutoffIso = new Date(Date.now() - ACTIVE_VIEWER_WINDOW_MS).toISOString();
 
-  await Promise.all(
-    list.keys.map(async (entry) => {
-      const raw = await env.LOGIN_ATTEMPTS.get(entry.name);
-      if (!raw) return;
-      try {
-        const payload = JSON.parse(raw) as { lastSeen: number };
-        if (now - payload.lastSeen <= 45_000) {
-          active += 1;
-        }
-      } catch {
-        // ignore malformed cache entries
-      }
-    })
-  );
+  const { count, error } = await supabase
+    .from('debate_watch_presence')
+    .select('user_id', { head: true, count: 'exact' })
+    .eq('debate_id', debateId)
+    .gte('last_seen', cutoffIso);
 
-  return active;
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return count ?? 0;
 }
 
 async function getDebateContext(
@@ -737,28 +727,26 @@ async function awardWatcherBonuses(
   endedAt: string,
   excludedUserIds: Set<string>
 ): Promise<void> {
-  const list = await env.LOGIN_ATTEMPTS.list({ prefix: `debate:watch:${debateId}:`, limit: 1000 });
+  const startLimitIso = new Date(new Date(startedAt).getTime() + WATCH_BONUS_MARGIN_MS).toISOString();
+  const endLimitIso = new Date(new Date(endedAt).getTime() - WATCH_BONUS_MARGIN_MS).toISOString();
+
+  const { data, error } = await supabase
+    .from('debate_watch_presence')
+    .select('user_id')
+    .eq('debate_id', debateId)
+    .lte('first_seen', startLimitIso)
+    .gte('last_seen', endLimitIso);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const watcherIds = ((data ?? []) as Array<{ user_id: string }>)
+    .map((row) => row.user_id)
+    .filter((userId) => !excludedUserIds.has(userId));
 
   await Promise.all(
-    list.keys.map(async (entry) => {
-      const userId = entry.name.split(':').pop() ?? '';
-      if (!userId || excludedUserIds.has(userId)) return;
-
-      const raw = await env.LOGIN_ATTEMPTS.get(entry.name);
-      if (!raw) return;
-
-      try {
-        const payload = JSON.parse(raw) as { firstSeen: number; lastSeen: number };
-        const startMs = new Date(startedAt).getTime();
-        const endMs = new Date(endedAt).getTime();
-
-        if (payload.firstSeen <= startMs + 15_000 && payload.lastSeen >= endMs - 15_000) {
-          await grantPoints(env, supabase, userId, context.debate.id, 5, 'spectate');
-        }
-      } catch {
-        // ignore malformed watcher entries
-      }
-    })
+    watcherIds.map((userId) => grantPoints(env, supabase, userId, context.debate.id, 5, 'spectate'))
   );
 }
 
@@ -985,6 +973,18 @@ async function finalizeDebate(
 
     if (stateUpdateError) throw new Error(stateUpdateError.message);
 
+    const { error: cleanupError } = await supabase
+      .from('debate_watch_presence')
+      .delete()
+      .eq('debate_id', context.debate.id);
+
+    if (cleanupError) {
+      console.warn('debate watch presence cleanup failed', {
+        debateId: context.debate.id,
+        error: cleanupError.message,
+      });
+    }
+
     return finalPayload;
   } finally {
     await env.LOGIN_ATTEMPTS.delete(lockKey);
@@ -1058,7 +1058,6 @@ async function advanceDebate(
 }
 
 async function buildSnapshotPayload(
-  env: Env,
   supabase: ReturnType<typeof getSupabase>,
   context: DebateContext,
   advancedState: DebateStateRow,
@@ -1133,7 +1132,7 @@ async function buildSnapshotPayload(
   const locked = advancedState.status === 'finished' || advancedState.status === 'cancelled' || overallRemainingSec <= 0;
 
   const parsedResult = finalResult ?? (await parseAiJudgment(context.debate.ai_judgment));
-  const viewerCount = await getActiveViewerCount(env, context.debate.id);
+  const viewerCount = await getActiveViewerCount(supabase, context.debate.id);
   const myVote = myVoteRes.data?.voted_side ?? null;
 
   return {
@@ -1290,11 +1289,11 @@ app.get('/:debateId/snapshot', authOptional, async (c) => {
     }
 
     if (viewerUserId) {
-      await recordWatchHeartbeat(c.env, debateId, viewerUserId);
+      await recordWatchHeartbeat(supabase, debateId, viewerUserId);
     }
 
     const { state, finalResult } = await advanceDebate(c.env, supabase, context);
-    const payload = await buildSnapshotPayload(c.env, supabase, context, state, finalResult);
+    const payload = await buildSnapshotPayload(supabase, context, state, finalResult);
     await publishRealtimeEvent(c.env, debateId, {
       type: 'state:update',
       source: 'snapshot',
@@ -1332,7 +1331,7 @@ app.get('/:debateId/tick', authOptional, async (c) => {
     }
 
     if (viewerUserId) {
-      await recordWatchHeartbeat(c.env, debateId, viewerUserId);
+      await recordWatchHeartbeat(supabase, debateId, viewerUserId);
     }
 
     const { state, finalResult } = await advanceDebate(c.env, supabase, context);
@@ -1395,7 +1394,8 @@ app.post('/:debateId/heartbeat', authRequired, async (c) => {
   }
 
   try {
-    await recordWatchHeartbeat(c.env, debateId, userId);
+    const supabase = getSupabase(c.env);
+    await recordWatchHeartbeat(supabase, debateId, userId);
     await publishRealtimeEvent(c.env, debateId, {
       type: 'heartbeat',
       source: 'heartbeat',

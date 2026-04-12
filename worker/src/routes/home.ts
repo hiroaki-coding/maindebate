@@ -40,28 +40,21 @@ const app = new Hono<{ Bindings: Env; Variables: { user: AuthUser | null; fireba
 
 const getSupabase = (env: Env) => createClient(env.SUPABASE_URL!, env.SUPABASE_SERVICE_KEY!);
 const hasSupabaseConfig = (env: Env) => Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_KEY);
+const ACTIVE_VIEWER_WINDOW_MS = 45_000;
 
-async function getActiveViewerCount(env: Env, debateId: string): Promise<number> {
-  const list = await env.LOGIN_ATTEMPTS.list({ prefix: `debate:watch:${debateId}:`, limit: 1000 });
-  const now = Date.now();
-  let active = 0;
+async function getActiveViewerCount(supabase: ReturnType<typeof getSupabase>, debateId: string): Promise<number> {
+  const cutoffIso = new Date(Date.now() - ACTIVE_VIEWER_WINDOW_MS).toISOString();
+  const { count, error } = await supabase
+    .from('debate_watch_presence')
+    .select('user_id', { head: true, count: 'exact' })
+    .eq('debate_id', debateId)
+    .gte('last_seen', cutoffIso);
 
-  await Promise.all(
-    list.keys.map(async (entry) => {
-      const raw = await env.LOGIN_ATTEMPTS.get(entry.name);
-      if (!raw) return;
-      try {
-        const payload = JSON.parse(raw) as { lastSeen: number };
-        if (now - payload.lastSeen <= 45_000) {
-          active += 1;
-        }
-      } catch {
-        // ignore malformed entries
-      }
-    })
-  );
+  if (error) {
+    throw new Error(error.message);
+  }
 
-  return active;
+  return count ?? 0;
 }
 
 app.get('/cards', authOptional, async (c) => {
@@ -178,7 +171,7 @@ app.get('/cards', authOptional, async (c) => {
     const viewerCounts = new Map<string, number>();
     await Promise.all(
       liveDebates.map(async (debate) => {
-        const viewers = await getActiveViewerCount(c.env, debate.id);
+        const viewers = await getActiveViewerCount(supabase, debate.id);
         viewerCounts.set(debate.id, viewers);
       })
     );
