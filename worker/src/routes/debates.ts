@@ -175,12 +175,89 @@ const FINALIZE_TIMEOUT_MS = 10_000;
 const ACTIVE_VIEWER_WINDOW_MS = 45_000;
 const WATCH_BONUS_MARGIN_MS = 15_000;
 
+type RuntimeCounterScope = 'debate_finalize_lock' | 'vote_throttle';
+type RuntimeCounterRow = {
+  count: number;
+  last_attempt_at: string;
+  locked_until: string | null;
+  expires_at: string;
+};
+
 function voteThrottleKey(userId: string) {
   return `debate:vote:${userId}`;
 }
 
 function finalizeLockKey(debateId: string) {
   return `debate:finalize-lock:${debateId}`;
+}
+
+async function readRuntimeCounter(
+  supabase: ReturnType<typeof getSupabase>,
+  scope: RuntimeCounterScope,
+  keyId: string
+): Promise<RuntimeCounterRow | null> {
+  const { data, error } = await supabase
+    .from('auth_runtime_counters')
+    .select('count, last_attempt_at, locked_until, expires_at')
+    .eq('scope', scope)
+    .eq('key_id', keyId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  if (!data) {
+    return null;
+  }
+
+  if (new Date(data.expires_at).getTime() <= Date.now()) {
+    await supabase
+      .from('auth_runtime_counters')
+      .delete()
+      .eq('scope', scope)
+      .eq('key_id', keyId);
+    return null;
+  }
+
+  return data as RuntimeCounterRow;
+}
+
+async function upsertRuntimeCounter(
+  supabase: ReturnType<typeof getSupabase>,
+  scope: RuntimeCounterScope,
+  keyId: string,
+  values: RuntimeCounterRow
+): Promise<void> {
+  const { error } = await supabase
+    .from('auth_runtime_counters')
+    .upsert(
+      {
+        scope,
+        key_id: keyId,
+        count: values.count,
+        last_attempt_at: values.last_attempt_at,
+        locked_until: values.locked_until,
+        expires_at: values.expires_at,
+      },
+      { onConflict: 'scope,key_id' }
+    );
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+async function clearRuntimeCounter(
+  supabase: ReturnType<typeof getSupabase>,
+  scope: RuntimeCounterScope,
+  keyId: string
+): Promise<void> {
+  await supabase
+    .from('auth_runtime_counters')
+    .delete()
+    .eq('scope', scope)
+    .eq('key_id', keyId);
 }
 
 function removeControlChars(input: string): string {
@@ -757,14 +834,20 @@ async function finalizeDebate(
   state: DebateStateRow
 ): Promise<FinalResultPayload> {
   const lockKey = finalizeLockKey(context.debate.id);
-  const existingLock = await env.LOGIN_ATTEMPTS.get(lockKey);
+  const existingLock = await readRuntimeCounter(supabase, 'debate_finalize_lock', lockKey);
 
   if (existingLock) {
     const parsed = await parseAiJudgment(context.debate.ai_judgment);
     if (parsed) return parsed;
   }
 
-  await env.LOGIN_ATTEMPTS.put(lockKey, '1', { expirationTtl: 20 });
+  const nowMs = Date.now();
+  await upsertRuntimeCounter(supabase, 'debate_finalize_lock', lockKey, {
+    count: 1,
+    last_attempt_at: new Date(nowMs).toISOString(),
+    locked_until: null,
+    expires_at: new Date(nowMs + 20_000).toISOString(),
+  });
 
   try {
     const { data: existingDebate, error: debateError } = await supabase
@@ -987,7 +1070,7 @@ async function finalizeDebate(
 
     return finalPayload;
   } finally {
-    await env.LOGIN_ATTEMPTS.delete(lockKey);
+    await clearRuntimeCounter(supabase, 'debate_finalize_lock', lockKey);
   }
 }
 
@@ -1571,19 +1654,23 @@ app.post('/:debateId/vote', authRequired, async (c) => {
     }
 
     const throttleKey = voteThrottleKey(userId);
-    const previousTsRaw = await c.env.LOGIN_ATTEMPTS.get(throttleKey);
+    const previousCounter = await readRuntimeCounter(supabase, 'vote_throttle', throttleKey);
+    const nowMs = Date.now();
+    const lockUntilMs = previousCounter?.locked_until ? new Date(previousCounter.locked_until).getTime() : 0;
 
-    if (previousTsRaw) {
-      const previousTs = Number(previousTsRaw);
-      if (!Number.isNaN(previousTs) && Date.now() - previousTs < VOTE_COOLDOWN_MS) {
-        const retryAfterSec = Math.max(1, Math.ceil((VOTE_COOLDOWN_MS - (Date.now() - previousTs)) / 1000));
-        c.header('Retry-After', String(retryAfterSec));
-        console.warn('[rate-limit] vote', { userId, debateId, at: new Date().toISOString() });
-        return c.json({ error: 'しばらくしてからもう一度お試しください' }, 429);
-      }
+    if (lockUntilMs > nowMs) {
+      const retryAfterSec = Math.max(1, Math.ceil((lockUntilMs - nowMs) / 1000));
+      c.header('Retry-After', String(retryAfterSec));
+      console.warn('[rate-limit] vote', { userId, debateId, at: new Date().toISOString() });
+      return c.json({ error: 'しばらくしてからもう一度お試しください' }, 429);
     }
 
-    await c.env.LOGIN_ATTEMPTS.put(throttleKey, String(Date.now()), { expirationTtl: 30 });
+    await upsertRuntimeCounter(supabase, 'vote_throttle', throttleKey, {
+      count: 1,
+      last_attempt_at: new Date(nowMs).toISOString(),
+      locked_until: new Date(nowMs + VOTE_COOLDOWN_MS).toISOString(),
+      expires_at: new Date(nowMs + 30_000).toISOString(),
+    });
 
     const { data: existingVote, error: existingVoteError } = await supabase
       .from('debate_votes')

@@ -16,9 +16,6 @@ export interface Env {
   // Durable Objects
   DEBATE_ROOM?: DurableObjectNamespace;
 
-  // KV
-  LOGIN_ATTEMPTS: KVNamespace;
-
   // Queues
   // DEBATE_RESULT_QUEUE?: Queue;
 }
@@ -60,10 +57,4 @@ export interface AuthUser {
   firebaseUid: string;
   userId: string;
   role: UserRole;
-}
-
-export interface LoginAttempt {
-  count: number;
-  lastAttempt: number;
-  lockedUntil?: number;
 }

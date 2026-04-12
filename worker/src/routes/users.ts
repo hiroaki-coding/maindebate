@@ -18,9 +18,8 @@ function hasSupabaseConfig(env: Env): boolean {
   return Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_KEY);
 }
 
-function nicknameDailyKey(userId: string, now: Date): string {
-  const day = now.toISOString().slice(0, 10);
-  return `nickname-change:${userId}:${day}`;
+function nicknameLimitDay(now: Date): string {
+  return now.toISOString().slice(0, 10);
 }
 
 function nextUtcReset(now: Date): Date {
@@ -52,53 +51,32 @@ app.get('/leaderboard', authOptional, async (c) => {
     return c.json({ error: 'Supabase credentials are not configured' }, 500);
   }
 
-  const cacheKey = 'leaderboard:top10:v1';
   const user = c.get('user');
 
   try {
-    const cached = await c.env.LOGIN_ATTEMPTS.get(cacheKey, 'json') as
-      | {
-          updatedAt: string;
-          top10: Array<{
-            id: string;
-            displayName: string;
-            avatarUrl: string | null;
-            points: number;
-            rank: UserRank;
-            worldRank: number;
-          }>;
-        }
-      | null;
+    const supabase = getSupabase(c.env);
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, display_name, avatar_url, points, rank, created_at')
+      .order('points', { ascending: false })
+      .order('created_at', { ascending: true })
+      .limit(10);
 
-    let payload = cached;
-
-    if (!payload) {
-      const supabase = getSupabase(c.env);
-      const { data, error } = await supabase
-        .from('users')
-        .select('id, display_name, avatar_url, points, rank, created_at')
-        .order('points', { ascending: false })
-        .order('created_at', { ascending: true })
-        .limit(10);
-
-      if (error) {
-        return c.json({ error: error.message }, 500);
-      }
-
-      payload = {
-        updatedAt: new Date().toISOString(),
-        top10: (data ?? []).map((row, index) => ({
-          id: row.id,
-          displayName: row.display_name,
-          avatarUrl: row.avatar_url,
-          points: row.points,
-          rank: row.rank as UserRank,
-          worldRank: index + 1,
-        })),
-      };
-
-      await c.env.LOGIN_ATTEMPTS.put(cacheKey, JSON.stringify(payload), { expirationTtl: 300 });
+    if (error) {
+      return c.json({ error: error.message }, 500);
     }
+
+    const payload = {
+      updatedAt: new Date().toISOString(),
+      top10: (data ?? []).map((row, index) => ({
+        id: row.id,
+        displayName: row.display_name,
+        avatarUrl: row.avatar_url,
+        points: row.points,
+        rank: row.rank as UserRank,
+        worldRank: index + 1,
+      })),
+    };
 
     let me: {
       id: string;
@@ -109,7 +87,6 @@ app.get('/leaderboard', authOptional, async (c) => {
     } | null = null;
 
     if (user?.userId) {
-      const supabase = getSupabase(c.env);
       const { data: meRow, error: meError } = await supabase
         .from('users')
         .select('id, display_name, points, created_at')
@@ -213,12 +190,23 @@ app.patch('/me/nickname', authRequired, async (c) => {
     if (!meRow) return c.json({ error: 'User not found' }, 404);
 
     const now = new Date();
+    const limitDay = nicknameLimitDay(now);
     const nextReset = nextUtcReset(now);
     const retryAfterSec = Math.max(1, Math.ceil((nextReset.getTime() - now.getTime()) / 1000));
 
-    const quotaKey = nicknameDailyKey(authUser.userId, now);
-    const quotaPayload = await c.env.LOGIN_ATTEMPTS.get(quotaKey, 'json') as { count?: number } | null;
-    const usedToday = Math.max(0, Number(quotaPayload?.count ?? 0));
+    const { data: quotaRow, error: quotaError } = await supabase
+      .from('user_daily_limits')
+      .select('count')
+      .eq('user_id', authUser.userId)
+      .eq('action', 'nickname_change')
+      .eq('day', limitDay)
+      .maybeSingle();
+
+    if (quotaError) {
+      return c.json({ error: quotaError.message }, 500);
+    }
+
+    const usedToday = Math.max(0, Number(quotaRow?.count ?? 0));
 
     if (displayName === meRow.display_name) {
       return c.json({
@@ -272,13 +260,21 @@ app.patch('/me/nickname', authRequired, async (c) => {
     }
 
     const nextUsed = usedToday + 1;
-    await c.env.LOGIN_ATTEMPTS.put(
-      quotaKey,
-      JSON.stringify({ count: nextUsed }),
-      { expirationTtl: retryAfterSec }
-    );
+    const { error: upsertLimitError } = await supabase
+      .from('user_daily_limits')
+      .upsert(
+        {
+          user_id: authUser.userId,
+          action: 'nickname_change',
+          day: limitDay,
+          count: nextUsed,
+        },
+        { onConflict: 'user_id,action,day' }
+      );
 
-    await c.env.LOGIN_ATTEMPTS.delete('leaderboard:top10:v1');
+    if (upsertLimitError) {
+      return c.json({ error: upsertLimitError.message }, 500);
+    }
 
     return c.json({
       displayName,

@@ -814,8 +814,6 @@ app.patch('/secure/rank-settings', async (c) => {
       if (error) return c.json({ error: error.message }, 500);
     }
 
-    await c.env.LOGIN_ATTEMPTS.delete('rank-settings:cache:v1');
-
     await writeAdminAuditLog({
       env: c.env,
       adminUserId: session.userId,

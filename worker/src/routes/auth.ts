@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { createClient } from '@supabase/supabase-js';
-import { Env, AuthUser, LoginAttempt } from '../types';
+import { Env, AuthUser } from '../types';
 import { authRequired } from '../middleware/auth';
 import { addCorsToResponse } from '../middleware/cors';
 import { addPointsWithLog, startOfUtcDay } from '../lib/points';
@@ -16,6 +16,81 @@ const DISPLAY_NAME_REGEX = /^[A-Za-z0-9\u3040-\u30FF\u3400-\u9FFF_-]{2,20}$/;
 
 const getSupabase = (env: Env) => createClient(env.SUPABASE_URL!, env.SUPABASE_SERVICE_KEY!);
 const hasSupabaseConfig = (env: Env) => Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_KEY);
+
+type RuntimeCounterScope = 'register_ip' | 'login_user' | 'login_admin';
+type RuntimeCounterRow = {
+  scope: RuntimeCounterScope;
+  key_id: string;
+  count: number;
+  last_attempt_at: string;
+  locked_until: string | null;
+  expires_at: string;
+};
+
+function counterScope(isAdmin: boolean): RuntimeCounterScope {
+  return isAdmin ? 'login_admin' : 'login_user';
+}
+
+async function readCounter(
+  supabase: ReturnType<typeof getSupabase>,
+  scope: RuntimeCounterScope,
+  keyId: string
+): Promise<RuntimeCounterRow | null> {
+  const { data, error } = await supabase
+    .from('auth_runtime_counters')
+    .select('scope, key_id, count, last_attempt_at, locked_until, expires_at')
+    .eq('scope', scope)
+    .eq('key_id', keyId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  if (!data) {
+    return null;
+  }
+
+  if (new Date(data.expires_at).getTime() <= Date.now()) {
+    await supabase
+      .from('auth_runtime_counters')
+      .delete()
+      .eq('scope', scope)
+      .eq('key_id', keyId);
+    return null;
+  }
+
+  return data as RuntimeCounterRow;
+}
+
+async function writeCounter(
+  supabase: ReturnType<typeof getSupabase>,
+  row: RuntimeCounterRow
+): Promise<void> {
+  const { error } = await supabase
+    .from('auth_runtime_counters')
+    .upsert(row, { onConflict: 'scope,key_id' });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+async function clearCounter(
+  supabase: ReturnType<typeof getSupabase>,
+  scope: RuntimeCounterScope,
+  keyId: string
+): Promise<void> {
+  const { error } = await supabase
+    .from('auth_runtime_counters')
+    .delete()
+    .eq('scope', scope)
+    .eq('key_id', keyId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
 
 function getClientIp(c: { req: { header: (name: string) => string | undefined } }): string {
   const direct = c.req.header('CF-Connecting-IP');
@@ -77,10 +152,11 @@ app.post('/register', authRequired, async (c) => {
       return c.json({ error: 'Bot activity detected' }, 403);
     }
 
-    const registerKey = `register:ip:${ip}`;
-    const registerRaw = await c.env.LOGIN_ATTEMPTS.get(registerKey);
-    const registerCount = Number(registerRaw ?? '0');
-    if (!Number.isNaN(registerCount) && registerCount >= MAX_REGISTER_PER_IP_PER_HOUR) {
+    const supabase = getSupabase(c.env);
+
+    const registerCounter = await readCounter(supabase, 'register_ip', ip);
+    const registerCount = registerCounter?.count ?? 0;
+    if (registerCount >= MAX_REGISTER_PER_IP_PER_HOUR) {
       c.header('Retry-After', String(60 * 60));
       console.warn('[rate-limit] register', { ip, count: registerCount, at: new Date().toISOString() });
       return c.json({ error: 'しばらくしてからお試しください' }, 429);
@@ -113,7 +189,6 @@ app.post('/register', authRequired, async (c) => {
       return c.json({ error: '13歳未満の方は登録できません' }, 400);
     }
 
-    const supabase = getSupabase(c.env);
     const { data, error } = await supabase
       .from('users')
       .insert({
@@ -131,8 +206,14 @@ app.post('/register', authRequired, async (c) => {
       return c.json({ error: error.message }, 500);
     }
 
-    await c.env.LOGIN_ATTEMPTS.put(registerKey, String(Math.max(0, registerCount) + 1), {
-      expirationTtl: 60 * 60,
+    const nowMs = Date.now();
+    await writeCounter(supabase, {
+      scope: 'register_ip',
+      key_id: ip,
+      count: Math.max(0, registerCount) + 1,
+      last_attempt_at: new Date(nowMs).toISOString(),
+      locked_until: null,
+      expires_at: new Date(nowMs + 60 * 60 * 1000).toISOString(),
     });
 
     return c.json(
@@ -278,6 +359,10 @@ app.post('/check-ban', async (c) => {
 });
 
 app.post('/login-attempt', async (c) => {
+  if (!hasSupabaseConfig(c.env)) {
+    return c.json({ error: 'Supabase credentials are not configured' }, 500);
+  }
+
   try {
     const body = await c.req.json<{
       keyId: string;
@@ -290,44 +375,46 @@ app.post('/login-attempt', async (c) => {
       return c.json({ error: 'keyId is required' }, 400);
     }
 
+    const supabase = getSupabase(c.env);
     const maxAttempts = isAdmin ? MAX_ADMIN_LOGIN_ATTEMPTS : MAX_LOGIN_ATTEMPTS;
     const lockMs = isAdmin ? ADMIN_LOCK_DURATION_MS : LOCK_DURATION_MS;
-    const key = `login:${isAdmin ? 'admin' : 'user'}:${keyId}`;
+    const scope = counterScope(isAdmin);
 
     if (success) {
-      await c.env.LOGIN_ATTEMPTS.delete(key);
+      await clearCounter(supabase, scope, keyId);
       return c.json({ locked: false });
     }
 
-    const existing = await c.env.LOGIN_ATTEMPTS.get<LoginAttempt>(key, 'json');
+    const existing = await readCounter(supabase, scope, keyId);
     const now = Date.now();
+    const lockedUntilMs = existing?.locked_until ? new Date(existing.locked_until).getTime() : 0;
 
-    if (existing?.lockedUntil && existing.lockedUntil > now) {
+    if (lockedUntilMs > now) {
       return c.json({
         locked: true,
-        lockUntil: new Date(existing.lockedUntil).toISOString(),
+        lockUntil: new Date(lockedUntilMs).toISOString(),
       });
     }
 
     const count = (existing?.count ?? 0) + 1;
-    const attempt: LoginAttempt = {
-      count,
-      lastAttempt: now,
-      lockedUntil: count >= maxAttempts ? now + lockMs : undefined,
-    };
-
+    const nextLockedUntilMs = count >= maxAttempts ? now + lockMs : 0;
     const attemptTtlSec = Math.max(300, Math.ceil(lockMs / 1000) + 120);
 
-    await c.env.LOGIN_ATTEMPTS.put(key, JSON.stringify(attempt), {
-      expirationTtl: attemptTtlSec,
+    await writeCounter(supabase, {
+      scope,
+      key_id: keyId,
+      count,
+      last_attempt_at: new Date(now).toISOString(),
+      locked_until: nextLockedUntilMs > 0 ? new Date(nextLockedUntilMs).toISOString() : null,
+      expires_at: new Date(now + attemptTtlSec * 1000).toISOString(),
     });
 
-    if (attempt.lockedUntil) {
-      const retryAfter = Math.max(1, Math.ceil((attempt.lockedUntil - now) / 1000));
+    if (nextLockedUntilMs > 0) {
+      const retryAfter = Math.max(1, Math.ceil((nextLockedUntilMs - now) / 1000));
       c.header('Retry-After', String(retryAfter));
       return c.json({
         locked: true,
-        lockUntil: new Date(attempt.lockedUntil).toISOString(),
+        lockUntil: new Date(nextLockedUntilMs).toISOString(),
       }, 423);
     }
 
@@ -343,6 +430,10 @@ app.post('/login-attempt', async (c) => {
 });
 
 app.post('/lock-status', async (c) => {
+  if (!hasSupabaseConfig(c.env)) {
+    return c.json({ error: 'Supabase credentials are not configured' }, 500);
+  }
+
   try {
     const body = await c.req.json<{ keyId: string; isAdmin?: boolean }>();
     const { keyId, isAdmin = false } = body;
@@ -351,17 +442,18 @@ app.post('/lock-status', async (c) => {
       return c.json({ error: 'keyId is required' }, 400);
     }
 
+    const supabase = getSupabase(c.env);
     const maxAttempts = isAdmin ? MAX_ADMIN_LOGIN_ATTEMPTS : MAX_LOGIN_ATTEMPTS;
-    const key = `login:${isAdmin ? 'admin' : 'user'}:${keyId}`;
-    const existing = await c.env.LOGIN_ATTEMPTS.get<LoginAttempt>(key, 'json');
+    const existing = await readCounter(supabase, counterScope(isAdmin), keyId);
     const now = Date.now();
+    const lockedUntilMs = existing?.locked_until ? new Date(existing.locked_until).getTime() : 0;
 
-    if (existing?.lockedUntil && existing.lockedUntil > now) {
-      const retryAfter = Math.max(1, Math.ceil((existing.lockedUntil - now) / 1000));
+    if (lockedUntilMs > now) {
+      const retryAfter = Math.max(1, Math.ceil((lockedUntilMs - now) / 1000));
       c.header('Retry-After', String(retryAfter));
       return c.json({
         locked: true,
-        lockUntil: new Date(existing.lockedUntil).toISOString(),
+        lockUntil: new Date(lockedUntilMs).toISOString(),
       }, 423);
     }
 

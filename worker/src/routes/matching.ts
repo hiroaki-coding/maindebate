@@ -6,10 +6,16 @@ import { addCorsToResponse } from '../middleware/cors';
 
 type MatchingMode = 'quick' | 'ranked';
 type MatchingStatus = 'idle' | 'searching' | 'matched';
+type QueueStatus = 'searching' | 'matching' | 'matched';
 
 type QueueRow = {
   user_id: string;
   joined_at: string;
+  match_mode: MatchingMode;
+  status: QueueStatus;
+  matched_debate_id: string | null;
+  matched_user_id: string | null;
+  assigned_side: DebateSide | null;
 };
 
 type UserRow = {
@@ -50,51 +56,16 @@ function isMatchingMode(value: string): value is MatchingMode {
   return value === 'quick' || value === 'ranked';
 }
 
-function modeKey(userId: string): string {
-  return `matching:mode:${userId}`;
-}
-
-function resultKey(userId: string): string {
-  return `matching:result:${userId}`;
-}
-
-async function getUserMode(env: Env, userId: string): Promise<MatchingMode> {
-  const value = await env.LOGIN_ATTEMPTS.get(modeKey(userId));
+function normalizeMode(value: string | null | undefined): MatchingMode {
   return value === 'ranked' ? 'ranked' : 'quick';
 }
 
-async function setUserMode(env: Env, userId: string, mode: MatchingMode): Promise<void> {
-  await env.LOGIN_ATTEMPTS.put(modeKey(userId), mode, { expirationTtl: 600 });
-}
-
-async function setMatchedResult(env: Env, userId: string, payload: MatchedPayload): Promise<void> {
-  await env.LOGIN_ATTEMPTS.put(resultKey(userId), JSON.stringify(payload), { expirationTtl: 120 });
-}
-
-async function getMatchedResult(env: Env, userId: string): Promise<MatchedPayload | null> {
-  const raw = await env.LOGIN_ATTEMPTS.get(resultKey(userId));
-  if (!raw) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(raw) as MatchedPayload;
-  } catch {
-    return null;
-  }
-}
-
-async function clearMatchingRuntime(env: Env, userId: string): Promise<void> {
-  await Promise.all([
-    env.LOGIN_ATTEMPTS.delete(modeKey(userId)),
-    env.LOGIN_ATTEMPTS.delete(resultKey(userId)),
-  ]);
-}
-
-async function getMatchingStats(supabase: ReturnType<typeof getSupabase>, mode: MatchingMode, env: Env) {
+async function getMatchingStats(supabase: ReturnType<typeof getSupabase>, mode: MatchingMode) {
   const { data, error } = await supabase
     .from('matching_queue')
-    .select('user_id, joined_at')
+    .select('joined_at')
+    .eq('match_mode', mode)
+    .eq('status', 'searching')
     .limit(200);
 
   if (error) {
@@ -103,33 +74,20 @@ async function getMatchingStats(supabase: ReturnType<typeof getSupabase>, mode: 
 
   const rows = data ?? [];
   const now = Date.now();
-  let activeUsers = 0;
   let totalSec = 0;
 
-  // NOTE:
-  // matching_queue に mode カラムがない環境をサポートするため、
-  // mode はKVに保持して集計する。
-  const modeList = await Promise.all(
-    rows.map(async (row) => ({
-      joinedAt: row.joined_at,
-      mode: await getUserMode(env, row.user_id),
-    }))
-  );
-
-  for (const row of modeList) {
-    if (row.mode !== mode) continue;
-    activeUsers += 1;
-    const diffMs = now - new Date(row.joinedAt).getTime();
+  for (const row of rows) {
+    const diffMs = now - new Date(row.joined_at).getTime();
     totalSec += Math.max(0, Math.round(diffMs / 1000));
   }
 
-  if (activeUsers === 0) {
+  if (rows.length === 0) {
     return { activeUsers: 0, avgWaitSec: 0 };
   }
 
   return {
-    activeUsers,
-    avgWaitSec: Math.round(totalSec / activeUsers),
+    activeUsers: rows.length,
+    avgWaitSec: Math.round(totalSec / rows.length),
   };
 }
 
@@ -164,6 +122,59 @@ async function getUserById(supabase: ReturnType<typeof getSupabase>, userId: str
   }
 
   return (data as UserRow | null) ?? null;
+}
+
+async function loadMatchedPayload(
+  supabase: ReturnType<typeof getSupabase>,
+  row: QueueRow,
+  self: UserRow
+): Promise<MatchedPayload | null> {
+  if (
+    row.status !== 'matched'
+    || !row.matched_debate_id
+    || !row.matched_user_id
+    || !row.assigned_side
+  ) {
+    return null;
+  }
+
+  const [opponent, debateResult] = await Promise.all([
+    getUserById(supabase, row.matched_user_id),
+    supabase
+      .from('debates')
+      .select('id, topic_id')
+      .eq('id', row.matched_debate_id)
+      .maybeSingle(),
+  ]);
+
+  if (debateResult.error || !debateResult.data || !opponent || opponent.is_banned) {
+    return null;
+  }
+
+  const { data: topic, error: topicError } = await supabase
+    .from('topics')
+    .select('id, title')
+    .eq('id', debateResult.data.topic_id)
+    .maybeSingle();
+
+  if (topicError || !topic) {
+    return null;
+  }
+
+  return {
+    status: 'matched',
+    debateId: debateResult.data.id,
+    topicId: topic.id,
+    topicTitle: topic.title,
+    yourSide: row.assigned_side,
+    opponent: {
+      id: opponent.id,
+      displayName: opponent.display_name,
+      avatarUrl: opponent.avatar_url,
+      rank: opponent.rank,
+      points: opponent.points,
+    },
+  };
 }
 
 function rankDistance(a: UserRank, b: UserRank): number {
@@ -230,8 +241,6 @@ app.post('/join', authRequired, async (c) => {
       return c.json({ error: 'BAN中のためマッチングに参加できません' }, 403);
     }
 
-    await clearMatchingRuntime(c.env, self.id);
-
     const nowIso = new Date().toISOString();
 
     const { error: upsertError } = await supabase
@@ -242,6 +251,12 @@ app.post('/join', authRequired, async (c) => {
           joined_at: nowIso,
           topic_id: null,
           preferred_side: null,
+          match_mode: mode,
+          status: 'searching',
+          matched_debate_id: null,
+          matched_user_id: null,
+          assigned_side: null,
+          updated_at: nowIso,
         },
         { onConflict: 'user_id' }
       );
@@ -250,12 +265,12 @@ app.post('/join', authRequired, async (c) => {
       return c.json({ error: upsertError.message }, 500);
     }
 
-    await setUserMode(c.env, self.id, mode);
-
     const { data: candidatesRaw, error: candidatesError } = await supabase
       .from('matching_queue')
-      .select('user_id, joined_at')
+      .select('user_id, joined_at, match_mode, status, matched_debate_id, matched_user_id, assigned_side')
       .neq('user_id', self.id)
+      .eq('match_mode', mode)
+      .eq('status', 'searching')
       .order('joined_at', { ascending: true })
       .limit(30);
 
@@ -263,17 +278,7 @@ app.post('/join', authRequired, async (c) => {
       return c.json({ error: candidatesError.message }, 500);
     }
 
-    const candidatesBase = (candidatesRaw ?? []) as QueueRow[];
-    const candidateModes = await Promise.all(
-      candidatesBase.map(async (candidate) => ({
-        candidate,
-        mode: await getUserMode(c.env, candidate.user_id),
-      }))
-    );
-
-    const candidates = candidateModes
-      .filter((entry) => entry.mode === mode)
-      .map((entry) => entry.candidate);
+    const candidates = (candidatesRaw ?? []) as QueueRow[];
 
     if (candidates.length > 0) {
       const candidateIds = candidates.map((candidate) => candidate.user_id);
@@ -302,16 +307,13 @@ app.post('/join', authRequired, async (c) => {
         // 先に相手レコードを claim して二重マッチを抑制
         const { data: claimed, error: claimError } = await supabase
           .from('matching_queue')
-          .delete()
+          .update({ status: 'matching', updated_at: new Date().toISOString() })
           .eq('user_id', opponent.id)
+          .eq('status', 'searching')
           .select('user_id')
           .maybeSingle();
 
-        if (claimError) {
-          continue;
-        }
-
-        if (!claimed) {
+        if (claimError || !claimed) {
           continue;
         }
 
@@ -319,9 +321,14 @@ app.post('/join', authRequired, async (c) => {
         if (!topic) {
           await supabase
             .from('matching_queue')
-            .upsert({ user_id: opponent.id, joined_at: candidate.joined_at, topic_id: null, preferred_side: null }, { onConflict: 'user_id' });
-
-          await setUserMode(c.env, opponent.id, mode);
+            .update({
+              status: 'searching',
+              matched_debate_id: null,
+              matched_user_id: null,
+              assigned_side: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('user_id', opponent.id);
 
           return c.json({ error: '有効な議題がありません。管理者が議題を追加してください' }, 503);
         }
@@ -346,9 +353,14 @@ app.post('/join', authRequired, async (c) => {
         if (createDebateError || !debate) {
           await supabase
             .from('matching_queue')
-            .upsert({ user_id: opponent.id, joined_at: candidate.joined_at, topic_id: null, preferred_side: null }, { onConflict: 'user_id' });
-
-          await setUserMode(c.env, opponent.id, mode);
+            .update({
+              status: 'searching',
+              matched_debate_id: null,
+              matched_user_id: null,
+              assigned_side: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('user_id', opponent.id);
 
           return c.json({ error: createDebateError?.message ?? 'ディベート作成に失敗しました' }, 500);
         }
@@ -368,8 +380,34 @@ app.post('/join', authRequired, async (c) => {
 
         const selfSide: DebateSide = selfIsPro ? 'pro' : 'con';
         const opponentSide: DebateSide = selfIsPro ? 'con' : 'pro';
+        const matchedAt = new Date().toISOString();
 
-        await supabase.from('matching_queue').delete().eq('user_id', self.id);
+        const [selfQueueUpdate, opponentQueueUpdate] = await Promise.all([
+          supabase
+            .from('matching_queue')
+            .update({
+              status: 'matched',
+              matched_debate_id: debate.id,
+              matched_user_id: opponent.id,
+              assigned_side: selfSide,
+              updated_at: matchedAt,
+            })
+            .eq('user_id', self.id),
+          supabase
+            .from('matching_queue')
+            .update({
+              status: 'matched',
+              matched_debate_id: debate.id,
+              matched_user_id: self.id,
+              assigned_side: opponentSide,
+              updated_at: matchedAt,
+            })
+            .eq('user_id', opponent.id),
+        ]);
+
+        if (selfQueueUpdate.error || opponentQueueUpdate.error) {
+          return c.json({ error: selfQueueUpdate.error?.message ?? opponentQueueUpdate.error?.message ?? 'マッチ状態の保存に失敗しました' }, 500);
+        }
 
         const selfPayload: MatchedPayload = {
           status: 'matched',
@@ -386,29 +424,7 @@ app.post('/join', authRequired, async (c) => {
           },
         };
 
-        const opponentPayload: MatchedPayload = {
-          status: 'matched',
-          debateId: debate.id,
-          topicId: topic.id,
-          topicTitle: topic.title,
-          yourSide: opponentSide,
-          opponent: {
-            id: self.id,
-            displayName: self.display_name,
-            avatarUrl: self.avatar_url,
-            rank: self.rank,
-            points: self.points,
-          },
-        };
-
-        await Promise.all([
-          setMatchedResult(c.env, self.id, selfPayload),
-          setMatchedResult(c.env, opponent.id, opponentPayload),
-          c.env.LOGIN_ATTEMPTS.delete(modeKey(self.id)),
-          c.env.LOGIN_ATTEMPTS.delete(modeKey(opponent.id)),
-        ]);
-
-        const stats = await getMatchingStats(supabase, mode, c.env);
+        const stats = await getMatchingStats(supabase, mode);
 
         return c.json({
           ...selfPayload,
@@ -417,7 +433,7 @@ app.post('/join', authRequired, async (c) => {
       }
     }
 
-    const stats = await getMatchingStats(supabase, mode, c.env);
+    const stats = await getMatchingStats(supabase, mode);
     const exampleTopic = await getRandomTopic(supabase);
 
     return c.json({
@@ -449,20 +465,9 @@ app.get('/status', authRequired, async (c) => {
   try {
     const supabase = getSupabase(c.env);
 
-    const matched = await getMatchedResult(c.env, authUser.userId);
-    if (matched) {
-      const mode = await getUserMode(c.env, authUser.userId);
-      const stats = await getMatchingStats(supabase, mode, c.env);
-      return c.json({
-        ...matched,
-        mode,
-        queueStats: stats,
-      });
-    }
-
     const { data: rowRaw, error } = await supabase
       .from('matching_queue')
-      .select('user_id, joined_at')
+      .select('user_id, joined_at, match_mode, status, matched_debate_id, matched_user_id, assigned_side')
       .eq('user_id', authUser.userId)
       .maybeSingle();
 
@@ -473,7 +478,7 @@ app.get('/status', authRequired, async (c) => {
     const row = (rowRaw as QueueRow | null) ?? null;
 
     if (!row) {
-      const stats = await getMatchingStats(supabase, 'quick', c.env);
+      const stats = await getMatchingStats(supabase, 'quick');
       const exampleTopic = await getRandomTopic(supabase);
 
       return c.json({
@@ -487,8 +492,23 @@ app.get('/status', authRequired, async (c) => {
       });
     }
 
-    const mode = await getUserMode(c.env, authUser.userId);
-    const stats = await getMatchingStats(supabase, mode, c.env);
+    const mode = normalizeMode(row.match_mode);
+    const self = await getUserById(supabase, authUser.userId);
+    if (!self) {
+      return c.json({ error: 'ユーザーが見つかりません' }, 404);
+    }
+
+    const matched = await loadMatchedPayload(supabase, row, self);
+    if (matched) {
+      const stats = await getMatchingStats(supabase, mode);
+      return c.json({
+        ...matched,
+        mode,
+        queueStats: stats,
+      });
+    }
+
+    const stats = await getMatchingStats(supabase, mode);
     const exampleTopic = await getRandomTopic(supabase);
 
     return c.json({
@@ -527,8 +547,6 @@ app.post('/cancel', authRequired, async (c) => {
     if (error) {
       return c.json({ error: error.message }, 500);
     }
-
-    await clearMatchingRuntime(c.env, authUser.userId);
 
     return c.json({ cancelled: true });
   } catch (error) {

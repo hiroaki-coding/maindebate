@@ -12,11 +12,6 @@ ENABLE_TEMP_CORS_DOMAINS = "true"
 [dev]
 port = 8788
 
-# KV（ログイン試行回数管理）
-[[kv_namespaces]]
-binding = "LOGIN_ATTEMPTS"
-id = "8d664529f8364717a0878621ef48f2d8"
-
 # Durable Objects
 [[durable_objects.bindings]]
 name = "DEBATE_ROOM"
