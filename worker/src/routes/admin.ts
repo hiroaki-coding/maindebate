@@ -25,6 +25,24 @@ function hasSupabaseConfig(env: Env): boolean {
   return Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_KEY);
 }
 
+async function timingSafeEqualText(left: string, right: string): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const [leftHash, rightHash] = await Promise.all([
+    crypto.subtle.digest('SHA-256', encoder.encode(left)),
+    crypto.subtle.digest('SHA-256', encoder.encode(right)),
+  ]);
+
+  const leftBytes = new Uint8Array(leftHash);
+  const rightBytes = new Uint8Array(rightHash);
+  let diff = left.length ^ right.length;
+
+  for (let i = 0; i < leftBytes.length; i += 1) {
+    diff |= leftBytes[i] ^ rightBytes[i];
+  }
+
+  return diff === 0;
+}
+
 async function ensureSecureAdminSession(
   c: AppContext
 ): Promise<{ userId: string; sessionToken: string; ipAddress: string } | Response> {
@@ -104,7 +122,7 @@ app.post('/secure/login', adminRequired, async (c) => {
     const password = body.password ?? '';
     const totp = body.totp ?? '';
 
-    const passwordOk = password === c.env.ADMIN_PANEL_PASSWORD;
+    const passwordOk = await timingSafeEqualText(password, c.env.ADMIN_PANEL_PASSWORD);
     const totpOk = await verifyTotp(c.env.ADMIN_TOTP_SECRET, totp);
 
     if (!passwordOk || !totpOk) {

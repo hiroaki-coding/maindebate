@@ -93,79 +93,39 @@ export async function addPointsWithLog(params: {
 
   const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
 
-  const { data: user, error: userError } = await supabase
-    .from('users')
-    .select('id, points, rank')
-    .eq('id', userId)
-    .maybeSingle();
+  const { data, error } = await supabase.rpc('rpc_add_points_with_log', {
+    p_user_id: userId,
+    p_base_delta: baseDelta,
+    p_reason: reason,
+    p_related_id: relatedId,
+    p_prevent_rank_down: preventRankDown,
+  });
 
-  if (userError) throw new Error(userError.message);
-  if (!user) throw new Error('User not found');
+  if (error) {
+    throw new Error(error.message);
+  }
 
-  const previousRank = user.rank as UserRank;
-  const previousPoints = Number(user.points ?? 0);
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | {
+        applied_delta: number;
+        new_points: number;
+        previous_rank: UserRank;
+        new_rank: UserRank;
+        ranked_up: boolean;
+      }
+    | null
+    | undefined;
 
-  const rankDef = rankByStoredRank(previousRank);
-  const multiplier = rankDef.multiplier;
-
-  const rawApplied = Math.floor(baseDelta * multiplier);
-  const nextPoints = Math.max(0, previousPoints + rawApplied);
-
-  const computedRank = rankByPoints(nextPoints);
-  const newRank = preventRankDown
-    ? rankByPoints(Math.max(previousPoints, nextPoints))
-    : computedRank;
-
-  const { error: updateError } = await supabase
-    .from('users')
-    .update({
-      points: nextPoints,
-      rank: newRank,
-    })
-    .eq('id', userId);
-
-  if (updateError) throw new Error(updateError.message);
-
-  const { error: logError } = await supabase
-    .from('point_logs')
-    .insert({
-      user_id: userId,
-      delta: rawApplied,
-      base_delta: baseDelta,
-      multiplier,
-      reason,
-      related_id: relatedId,
-    });
-
-  if (logError) throw new Error(logError.message);
-
-  // 既存互換として point_history も継続記録
-  await supabase
-    .from('point_history')
-    .insert({
-      user_id: userId,
-      debate_id: relatedId,
-      change_amount: rawApplied,
-      reason,
-    });
-
-  if (newRank !== previousRank) {
-    await supabase
-      .from('notifications')
-      .insert({
-        user_id: userId,
-        category: 'rank_up',
-        title: 'ランクアップしました',
-        body: `${previousRank.toUpperCase()} から ${newRank.toUpperCase()} に昇格しました`,
-      });
+  if (!row) {
+    throw new Error('Failed to apply point update');
   }
 
   return {
-    appliedDelta: rawApplied,
-    newPoints: nextPoints,
-    previousRank,
-    newRank,
-    rankedUp: newRank !== previousRank,
+    appliedDelta: row.applied_delta,
+    newPoints: row.new_points,
+    previousRank: row.previous_rank,
+    newRank: row.new_rank,
+    rankedUp: row.ranked_up,
   };
 }
 

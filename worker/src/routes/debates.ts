@@ -127,6 +127,69 @@ type RealtimeEventPayload = {
   turnNumber?: number;
 };
 
+type RealtimeTicketRole = 'authenticated' | 'guest';
+
+type RealtimeTicketPayload = {
+  v: 1;
+  jti: string;
+  debateId: string;
+  userId: string | null;
+  role: RealtimeTicketRole;
+  iat: number;
+  exp: number;
+};
+
+const REALTIME_TICKET_TTL_SEC = 30;
+
+function bytesToBase64Url(bytes: Uint8Array): string {
+  let binary = '';
+  for (const b of bytes) {
+    binary += String.fromCharCode(b);
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+async function signRealtimeTicket(secret: string, payloadB64: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payloadB64));
+  return bytesToBase64Url(new Uint8Array(signature));
+}
+
+async function issueRealtimeTicket(params: {
+  secret: string;
+  debateId: string;
+  userId: string | null;
+  role: RealtimeTicketRole;
+  nowSec?: number;
+}): Promise<string> {
+  const { secret, debateId, userId, role, nowSec } = params;
+  if (!secret || secret.length < 32) {
+    throw new Error('INTERNAL_SECRET is not configured or too weak');
+  }
+
+  const now = nowSec ?? Math.floor(Date.now() / 1000);
+  const payload: RealtimeTicketPayload = {
+    v: 1,
+    jti: crypto.randomUUID(),
+    debateId,
+    userId,
+    role,
+    iat: now,
+    exp: now + REALTIME_TICKET_TTL_SEC,
+  };
+
+  const payloadB64 = bytesToBase64Url(new TextEncoder().encode(JSON.stringify(payload)));
+  const signatureB64 = await signRealtimeTicket(secret, payloadB64);
+  return `${payloadB64}.${signatureB64}`;
+}
+
 function getDebateRoomStub(env: Env, debateId: string): DurableObjectStub | null {
   if (!env.DEBATE_ROOM) return null;
   const id = env.DEBATE_ROOM.idFromName(debateId);
@@ -1326,14 +1389,23 @@ app.get('/:debateId/realtime/ws', authOptional, async (c) => {
     return c.json({ error: 'Expected websocket upgrade' }, 426);
   }
 
+  if (!c.env.INTERNAL_SECRET || c.env.INTERNAL_SECRET.length < 32) {
+    return c.json({ error: 'Realtime security is not configured' }, 500);
+  }
+
   const user = c.get('user');
+  const userId = typeof user?.userId === 'string' ? user.userId : null;
+  const role: RealtimeTicketRole = userId ? 'authenticated' : 'guest';
+  const ticket = await issueRealtimeTicket({
+    secret: c.env.INTERNAL_SECRET,
+    debateId,
+    userId,
+    role,
+  });
+
   const roomUrl = new URL('https://debate-room/connect');
   roomUrl.searchParams.set('debateId', debateId);
-
-  if (typeof user?.userId === 'string') {
-    roomUrl.searchParams.set('userId', user.userId);
-  }
-  roomUrl.searchParams.set('role', user ? 'authenticated' : 'guest');
+  roomUrl.searchParams.set('ticket', ticket);
 
   const req = new Request(roomUrl.toString(), {
     method: 'GET',

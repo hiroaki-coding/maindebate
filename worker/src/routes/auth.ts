@@ -27,6 +27,21 @@ type RuntimeCounterRow = {
   expires_at: string;
 };
 
+type RuntimeCounterConsumeResult = {
+  allowed: boolean;
+  count: number;
+  expires_at: string;
+  retry_after_sec: number;
+};
+
+type RuntimeCounterFailureResult = {
+  locked: boolean;
+  already_locked: boolean;
+  lock_until: string | null;
+  count: number;
+  remaining_attempts: number;
+};
+
 function counterScope(isAdmin: boolean): RuntimeCounterScope {
   return isAdmin ? 'login_admin' : 'login_user';
 }
@@ -36,44 +51,74 @@ async function readCounter(
   scope: RuntimeCounterScope,
   keyId: string
 ): Promise<RuntimeCounterRow | null> {
-  const { data, error } = await supabase
-    .from('auth_runtime_counters')
-    .select('scope, key_id, count, last_attempt_at, locked_until, expires_at')
-    .eq('scope', scope)
-    .eq('key_id', keyId)
-    .maybeSingle();
+  const { data, error } = await supabase.rpc('rpc_auth_runtime_counter_get', {
+    p_scope: scope,
+    p_key_id: keyId,
+    p_now: new Date().toISOString(),
+  });
 
   if (error) {
     throw new Error(error.message);
   }
 
-  if (!data) {
-    return null;
-  }
-
-  if (new Date(data.expires_at).getTime() <= Date.now()) {
-    await supabase
-      .from('auth_runtime_counters')
-      .delete()
-      .eq('scope', scope)
-      .eq('key_id', keyId);
-    return null;
-  }
-
-  return data as RuntimeCounterRow;
+  const row = (Array.isArray(data) ? data[0] : data) as RuntimeCounterRow | null | undefined;
+  return row ?? null;
 }
 
-async function writeCounter(
+async function consumeCounterWithLimit(
   supabase: ReturnType<typeof getSupabase>,
-  row: RuntimeCounterRow
-): Promise<void> {
-  const { error } = await supabase
-    .from('auth_runtime_counters')
-    .upsert(row, { onConflict: 'scope,key_id' });
+  scope: RuntimeCounterScope,
+  keyId: string,
+  limit: number,
+  windowSec: number
+): Promise<RuntimeCounterConsumeResult> {
+  const { data, error } = await supabase.rpc('rpc_auth_runtime_counter_consume_limit', {
+    p_scope: scope,
+    p_key_id: keyId,
+    p_limit: limit,
+    p_window_sec: windowSec,
+    p_now: new Date().toISOString(),
+  });
 
   if (error) {
     throw new Error(error.message);
   }
+
+  const row = (Array.isArray(data) ? data[0] : data) as RuntimeCounterConsumeResult | null | undefined;
+  if (!row) {
+    throw new Error('Failed to consume runtime counter');
+  }
+
+  return row;
+}
+
+async function recordLoginFailure(
+  supabase: ReturnType<typeof getSupabase>,
+  scope: RuntimeCounterScope,
+  keyId: string,
+  maxAttempts: number,
+  lockMs: number,
+  attemptTtlSec: number
+): Promise<RuntimeCounterFailureResult> {
+  const { data, error } = await supabase.rpc('rpc_auth_runtime_counter_record_failure', {
+    p_scope: scope,
+    p_key_id: keyId,
+    p_max_attempts: maxAttempts,
+    p_lock_ms: lockMs,
+    p_attempt_ttl_sec: attemptTtlSec,
+    p_now: new Date().toISOString(),
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const row = (Array.isArray(data) ? data[0] : data) as RuntimeCounterFailureResult | null | undefined;
+  if (!row) {
+    throw new Error('Failed to record login failure');
+  }
+
+  return row;
 }
 
 async function clearCounter(
@@ -154,14 +199,6 @@ app.post('/register', authRequired, async (c) => {
 
     const supabase = getSupabase(c.env);
 
-    const registerCounter = await readCounter(supabase, 'register_ip', ip);
-    const registerCount = registerCounter?.count ?? 0;
-    if (registerCount >= MAX_REGISTER_PER_IP_PER_HOUR) {
-      c.header('Retry-After', String(60 * 60));
-      console.warn('[rate-limit] register', { ip, count: registerCount, at: new Date().toISOString() });
-      return c.json({ error: 'しばらくしてからお試しください' }, 429);
-    }
-
     if (c.env.TURNSTILE_SECRET_KEY) {
       if (!turnstileToken) {
         return c.json({ error: 'Turnstile token is required' }, 403);
@@ -189,6 +226,27 @@ app.post('/register', authRequired, async (c) => {
       return c.json({ error: '13歳未満の方は登録できません' }, 400);
     }
 
+    const registerGate = await consumeCounterWithLimit(
+      supabase,
+      'register_ip',
+      ip,
+      MAX_REGISTER_PER_IP_PER_HOUR,
+      60 * 60
+    );
+
+    if (!registerGate.allowed) {
+      const retryAfter = Number.isFinite(registerGate.retry_after_sec)
+        ? Math.max(1, registerGate.retry_after_sec)
+        : 60 * 60;
+      c.header('Retry-After', String(retryAfter));
+      console.warn('[rate-limit] register', {
+        ip,
+        count: registerGate.count,
+        at: new Date().toISOString(),
+      });
+      return c.json({ error: 'しばらくしてからお試しください' }, 429);
+    }
+
     const { data, error } = await supabase
       .from('users')
       .insert({
@@ -205,16 +263,6 @@ app.post('/register', authRequired, async (c) => {
       }
       return c.json({ error: error.message }, 500);
     }
-
-    const nowMs = Date.now();
-    await writeCounter(supabase, {
-      scope: 'register_ip',
-      key_id: ip,
-      count: Math.max(0, registerCount) + 1,
-      last_attempt_at: new Date(nowMs).toISOString(),
-      locked_until: null,
-      expires_at: new Date(nowMs + 60 * 60 * 1000).toISOString(),
-    });
 
     return c.json(
       {
@@ -268,7 +316,7 @@ app.get('/me', authRequired, async (c) => {
       if (!prevUtc) {
         nextStreak = 1;
       } else {
-        const dayDiff = Math.floor((todayUtc.getTime() - prevUtc.getTime()) / (24 * 60 * 60 * 1000));
+        const dayDiff = Math.round((todayUtc.getTime() - prevUtc.getTime()) / (24 * 60 * 60 * 1000));
         nextStreak = dayDiff === 1 ? nextStreak + 1 : 1;
       }
 
@@ -385,42 +433,37 @@ app.post('/login-attempt', async (c) => {
       return c.json({ locked: false });
     }
 
-    const existing = await readCounter(supabase, scope, keyId);
-    const now = Date.now();
-    const lockedUntilMs = existing?.locked_until ? new Date(existing.locked_until).getTime() : 0;
-
-    if (lockedUntilMs > now) {
-      return c.json({
-        locked: true,
-        lockUntil: new Date(lockedUntilMs).toISOString(),
-      });
-    }
-
-    const count = (existing?.count ?? 0) + 1;
-    const nextLockedUntilMs = count >= maxAttempts ? now + lockMs : 0;
     const attemptTtlSec = Math.max(300, Math.ceil(lockMs / 1000) + 120);
 
-    await writeCounter(supabase, {
+    const failure = await recordLoginFailure(
+      supabase,
       scope,
-      key_id: keyId,
-      count,
-      last_attempt_at: new Date(now).toISOString(),
-      locked_until: nextLockedUntilMs > 0 ? new Date(nextLockedUntilMs).toISOString() : null,
-      expires_at: new Date(now + attemptTtlSec * 1000).toISOString(),
-    });
+      keyId,
+      maxAttempts,
+      lockMs,
+      attemptTtlSec
+    );
 
-    if (nextLockedUntilMs > 0) {
-      const retryAfter = Math.max(1, Math.ceil((nextLockedUntilMs - now) / 1000));
-      c.header('Retry-After', String(retryAfter));
+    if (failure.locked) {
+      const lockUntilMs = failure.lock_until ? new Date(failure.lock_until).getTime() : 0;
+      if (lockUntilMs > Date.now() && !failure.already_locked) {
+        const retryAfter = Math.max(1, Math.ceil((lockUntilMs - Date.now()) / 1000));
+        c.header('Retry-After', String(retryAfter));
+        return c.json({
+          locked: true,
+          lockUntil: new Date(lockUntilMs).toISOString(),
+        }, 423);
+      }
+
       return c.json({
         locked: true,
-        lockUntil: new Date(nextLockedUntilMs).toISOString(),
-      }, 423);
+        lockUntil: failure.lock_until,
+      });
     }
 
     return c.json({
       locked: false,
-      remainingAttempts: maxAttempts - count,
+      remainingAttempts: failure.remaining_attempts,
     });
   } catch (error) {
     console.error('Login attempt tracking error:', error);

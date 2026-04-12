@@ -1,5 +1,16 @@
 type DebateStatus = 'waiting' | 'matching' | 'in_progress' | 'voting' | 'finished' | 'cancelled';
 type DebateSide = 'pro' | 'con' | null;
+type RealtimeTicketRole = 'authenticated' | 'guest';
+
+type RealtimeTicketPayload = {
+  v: 1;
+  jti: string;
+  debateId: string;
+  userId: string | null;
+  role: RealtimeTicketRole;
+  iat: number;
+  exp: number;
+};
 
 type RealtimeSnapshot = {
   debateId: string;
@@ -38,6 +49,9 @@ type DebateRoomEnv = {
 };
 
 const STORAGE_KEY = 'realtime:snapshot';
+const USED_WS_TICKET_PREFIX = 'realtime:used-ticket:';
+const MAX_IAT_FUTURE_SKEW_SEC = 30;
+const MAX_TICKET_LIFETIME_SEC = 120;
 
 export class DebateRoom {
   private readonly state: DurableObjectState;
@@ -128,10 +142,113 @@ export class DebateRoom {
     await this.state.storage.put(STORAGE_KEY, this.snapshot);
   }
 
+  private base64UrlToBytes(input: string): Uint8Array {
+    let base64 = input.replace(/-/g, '+').replace(/_/g, '/');
+    while (base64.length % 4) {
+      base64 += '=';
+    }
+
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  }
+
+  private async verifyRealtimeTicket(ticket: string): Promise<RealtimeTicketPayload | null> {
+    if (!this.env.INTERNAL_SECRET || this.env.INTERNAL_SECRET.length < 32) {
+      return null;
+    }
+
+    const parts = ticket.split('.');
+    if (parts.length !== 2) {
+      return null;
+    }
+
+    const [payloadB64, signatureB64] = parts;
+    let payload: RealtimeTicketPayload;
+    let signature: Uint8Array;
+
+    try {
+      signature = this.base64UrlToBytes(signatureB64);
+      const payloadJson = new TextDecoder().decode(this.base64UrlToBytes(payloadB64));
+      payload = JSON.parse(payloadJson) as RealtimeTicketPayload;
+    } catch {
+      return null;
+    }
+
+    const key = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(this.env.INTERNAL_SECRET),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['verify']
+    );
+
+    const validSignature = await crypto.subtle.verify(
+      'HMAC',
+      key,
+      signature,
+      new TextEncoder().encode(payloadB64)
+    );
+    if (!validSignature) {
+      return null;
+    }
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (payload.v !== 1) return null;
+    if (typeof payload.jti !== 'string' || payload.jti.length < 8) return null;
+    if (typeof payload.debateId !== 'string' || payload.debateId.length === 0) return null;
+    if (payload.userId !== null && (typeof payload.userId !== 'string' || payload.userId.length === 0)) return null;
+    if (payload.role !== 'authenticated' && payload.role !== 'guest') return null;
+    if (payload.role === 'authenticated' && payload.userId === null) return null;
+    if (payload.role === 'guest' && payload.userId !== null) return null;
+    if (!Number.isInteger(payload.iat) || !Number.isInteger(payload.exp)) return null;
+    if (payload.exp <= nowSec) return null;
+    if (payload.iat > nowSec + MAX_IAT_FUTURE_SKEW_SEC) return null;
+    if (payload.exp - payload.iat > MAX_TICKET_LIFETIME_SEC) return null;
+
+    return payload;
+  }
+
+  private async consumeTicketOnce(jti: string, exp: number): Promise<boolean> {
+    const key = `${USED_WS_TICKET_PREFIX}${jti}`;
+    let accepted = false;
+
+    await this.state.blockConcurrencyWhile(async () => {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const usedUntil = await this.state.storage.get<number>(key);
+      if (typeof usedUntil === 'number' && usedUntil > nowSec) {
+        accepted = false;
+        return;
+      }
+
+      await this.state.storage.put(key, exp);
+      accepted = true;
+    });
+
+    if (Math.random() < 0.1) {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const entries = await this.state.storage.list<number>({
+        prefix: USED_WS_TICKET_PREFIX,
+        limit: 128,
+      });
+
+      for (const [entryKey, usedUntil] of entries.entries()) {
+        if (typeof usedUntil !== 'number' || usedUntil <= nowSec) {
+          await this.state.storage.delete(entryKey);
+        }
+      }
+    }
+
+    return accepted;
+  }
+
   private authorizeInternalRequest(request: Request): boolean {
     const configured = this.env.INTERNAL_SECRET;
-    if (!configured) {
-      return true;
+    if (!configured || configured.length < 32) {
+      return false;
     }
 
     const provided = request.headers.get('x-internal-secret');
@@ -144,22 +261,41 @@ export class DebateRoom {
       return this.jsonResponse({ error: 'Expected websocket upgrade' }, 426);
     }
 
+    if (!this.env.INTERNAL_SECRET || this.env.INTERNAL_SECRET.length < 32) {
+      return this.jsonResponse({ error: 'Realtime security is not configured' }, 500);
+    }
+
+    const debateIdFromQuery = url.searchParams.get('debateId');
+    const rawTicket = url.searchParams.get('ticket') ?? '';
+    if (!debateIdFromQuery || !rawTicket) {
+      return this.jsonResponse({ error: 'Missing realtime auth ticket' }, 401);
+    }
+
+    const ticket = await this.verifyRealtimeTicket(rawTicket);
+    if (!ticket || ticket.debateId !== debateIdFromQuery) {
+      return this.jsonResponse({ error: 'Invalid realtime auth ticket' }, 401);
+    }
+
+    const consumeOk = await this.consumeTicketOnce(ticket.jti, ticket.exp);
+    if (!consumeOk) {
+      return this.jsonResponse({ error: 'Realtime auth ticket already used' }, 401);
+    }
+
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
 
     const snapshot = this.ensureSnapshot();
     if (snapshot.debateId === 'unknown') {
-      const fromQuery = url.searchParams.get('debateId');
-      if (fromQuery) {
-        snapshot.debateId = fromQuery;
-      }
+      snapshot.debateId = ticket.debateId;
+    } else if (snapshot.debateId !== ticket.debateId) {
+      return this.jsonResponse({ error: 'Debate room mismatch' }, 403);
     }
 
     const meta: ClientMeta = {
       id: crypto.randomUUID(),
-      userId: url.searchParams.get('userId'),
-      role: url.searchParams.get('role'),
+      userId: ticket.userId,
+      role: ticket.role,
       joinedAt: Date.now(),
       lastSeenAt: Date.now(),
     };
