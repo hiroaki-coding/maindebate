@@ -24,7 +24,7 @@ class_name = "DebateRoom"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["DebateRoom"]
+new_sqlite_classes = ["DebateRoom"]
 
 # 本番環境
 [env.production]
