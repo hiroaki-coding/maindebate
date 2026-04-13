@@ -20,7 +20,7 @@ interface AuthState {
   error: string | null;
 
   // アクション
-  initialize: () => void;
+  initialize: () => () => void;
   loginWithEmail: (email: string, password: string) => Promise<void>;
   loginWithGoogle: () => Promise<{ isNewUser: boolean }>;
   registerWithEmail: (email: string, password: string) => Promise<void>;

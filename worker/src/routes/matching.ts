@@ -178,7 +178,18 @@ async function loadMatchedPayload(
 }
 
 function rankDistance(a: UserRank, b: UserRank): number {
-  const rankOrder: UserRank[] = ['bronze', 'silver', 'gold', 'platinum', 'diamond'];
+  const rankOrder: UserRank[] = [
+    'bronze',
+    'silver',
+    'gold',
+    'platinum',
+    'diamond',
+    'master',
+    'grandmaster',
+    'champion',
+    'legend',
+    'mythic',
+  ];
   const aIndex = rankOrder.indexOf(a);
   const bIndex = rankOrder.indexOf(b);
   if (aIndex < 0 || bIndex < 0) return 99;
@@ -366,7 +377,7 @@ app.post('/join', authRequired, async (c) => {
         }
 
         const battleStart = new Date().toISOString();
-        await supabase
+        const { error: stateInitError } = await supabase
           .from('debate_state')
           .update({
             status: 'in_progress',
@@ -377,6 +388,26 @@ app.post('/join', authRequired, async (c) => {
             updated_at: battleStart,
           })
           .eq('debate_id', debate.id);
+
+        if (stateInitError) {
+          await supabase
+            .from('matching_queue')
+            .update({
+              status: 'searching',
+              matched_debate_id: null,
+              matched_user_id: null,
+              assigned_side: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('user_id', opponent.id);
+
+          await supabase
+            .from('debates')
+            .delete()
+            .eq('id', debate.id);
+
+          return c.json({ error: stateInitError.message }, 500);
+        }
 
         const selfSide: DebateSide = selfIsPro ? 'pro' : 'con';
         const opponentSide: DebateSide = selfIsPro ? 'con' : 'pro';

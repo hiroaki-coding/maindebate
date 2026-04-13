@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { Button } from '../components/common';
 import { useAuthStore } from '../store/authStore';
@@ -19,31 +19,7 @@ export function VerifyEmailPage() {
     authMethod?: 'email' | 'google';
   }) || {};
 
-  // Googleログインの場合はすぐに登録処理
-  useEffect(() => {
-    if (authMethod === 'google' && displayName && birthDate) {
-      handleCompleteRegistration();
-    }
-  }, [authMethod]);
-
-  // 定期的にメール確認状態をチェック
-  useEffect(() => {
-    if (authMethod !== 'email') return;
-
-    const interval = setInterval(async () => {
-      if (firebaseUser) {
-        await firebaseUser.reload();
-        if (firebaseUser.emailVerified) {
-          clearInterval(interval);
-          handleCompleteRegistration();
-        }
-      }
-    }, 3000); // 3秒ごとにチェック
-
-    return () => clearInterval(interval);
-  }, [firebaseUser, authMethod]);
-
-  const handleCompleteRegistration = async () => {
+  const handleCompleteRegistration = useCallback(async () => {
     if (!displayName || !birthDate) {
       navigate('/register');
       return;
@@ -57,7 +33,31 @@ export function VerifyEmailPage() {
       // エラー処理
       setIsCheckingVerification(false);
     }
-  };
+  }, [birthDate, displayName, navigate, registerUser]);
+
+  // Googleログインの場合はすぐに登録処理
+  useEffect(() => {
+    if (authMethod === 'google' && displayName && birthDate) {
+      void handleCompleteRegistration();
+    }
+  }, [authMethod, birthDate, displayName, handleCompleteRegistration]);
+
+  // 定期的にメール確認状態をチェック
+  useEffect(() => {
+    if (authMethod !== 'email') return;
+
+    const interval = setInterval(async () => {
+      if (firebaseUser) {
+        await firebaseUser.reload();
+        if (firebaseUser.emailVerified) {
+          clearInterval(interval);
+          void handleCompleteRegistration();
+        }
+      }
+    }, 3000); // 3秒ごとにチェック
+
+    return () => clearInterval(interval);
+  }, [firebaseUser, authMethod, handleCompleteRegistration]);
 
   const handleResendEmail = async () => {
     setIsResending(true);

@@ -25,6 +25,12 @@ function hasSupabaseConfig(env: Env): boolean {
   return Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_KEY);
 }
 
+function throwIfMutationError(result: { error: { message: string } | null }, action: string): void {
+  if (result.error) {
+    throw new Error(`${action}: ${result.error.message}`);
+  }
+}
+
 async function timingSafeEqualText(left: string, right: string): Promise<boolean> {
   const encoder = new TextEncoder();
   const [leftHash, rightHash] = await Promise.all([
@@ -449,16 +455,23 @@ app.delete('/secure/users/:userId', async (c) => {
 
     const supabase = getSupabase(c.env);
 
-    await supabase.from('matching_queue').delete().eq('user_id', userId);
-    await supabase.from('debate_votes').delete().eq('user_id', userId);
-    await supabase.from('debate_comments').delete().eq('user_id', userId);
-    await supabase.from('debate_messages').delete().eq('user_id', userId);
-    await supabase.from('reports').delete().eq('reporter_id', userId);
-    await supabase.from('notifications').delete().eq('user_id', userId);
-    await supabase.from('point_logs').delete().eq('user_id', userId);
-    await supabase.from('point_history').delete().eq('user_id', userId);
-    await supabase.from('debates').update({ pro_user_id: null }).eq('pro_user_id', userId);
-    await supabase.from('debates').update({ con_user_id: null }).eq('con_user_id', userId);
+    const matchingDelete = await supabase.from('matching_queue').delete().eq('user_id', userId);
+    throwIfMutationError(matchingDelete, 'matching_queue cleanup failed');
+
+    const votesDelete = await supabase.from('debate_votes').delete().eq('user_id', userId);
+    throwIfMutationError(votesDelete, 'debate_votes cleanup failed');
+
+    const commentsDelete = await supabase.from('debate_comments').delete().eq('user_id', userId);
+    throwIfMutationError(commentsDelete, 'debate_comments cleanup failed');
+
+    const messagesDelete = await supabase.from('debate_messages').delete().eq('user_id', userId);
+    throwIfMutationError(messagesDelete, 'debate_messages cleanup failed');
+
+    const proNullUpdate = await supabase.from('debates').update({ pro_user_id: null }).eq('pro_user_id', userId);
+    throwIfMutationError(proNullUpdate, 'debates pro_user cleanup failed');
+
+    const conNullUpdate = await supabase.from('debates').update({ con_user_id: null }).eq('con_user_id', userId);
+    throwIfMutationError(conNullUpdate, 'debates con_user cleanup failed');
 
     const { error } = await supabase.from('users').delete().eq('id', userId);
     if (error) return c.json({ error: error.message }, 500);

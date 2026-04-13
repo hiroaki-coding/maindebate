@@ -211,7 +211,10 @@ function App() {
   const { initialize } = useAuthStore();
 
   useEffect(() => {
-    initialize();
+    const unsubscribe = initialize();
+    return () => {
+      unsubscribe();
+    };
   }, [initialize]);
 
   return (

@@ -11,6 +11,29 @@ type AuthContext = Context<{
   };
 }>;
 
+function resolveFirebaseUid(
+  verified: { uid?: unknown; sub?: unknown; user_id?: unknown },
+  allowLegacyFallback: boolean
+): string | null {
+  if (typeof verified.uid === 'string' && verified.uid.length > 0) {
+    return verified.uid;
+  }
+
+  if (!allowLegacyFallback) {
+    return null;
+  }
+
+  if (typeof verified.user_id === 'string' && verified.user_id.length > 0) {
+    return verified.user_id;
+  }
+
+  if (typeof verified.sub === 'string' && verified.sub.length > 0) {
+    return verified.sub;
+  }
+
+  return null;
+}
+
 // 必須認証ミドルウェア
 export async function authRequired(c: AuthContext, next: Next): Promise<Response | void> {
   const authHeader = c.req.header('Authorization');
@@ -25,6 +48,7 @@ export async function authRequired(c: AuthContext, next: Next): Promise<Response
   }
 
   let firebaseUid: string | null = null;
+  const allowLegacyFallback = c.env.ENVIRONMENT !== 'production';
 
   try {
     const verified = await verifyFirebaseToken(token, c.env.FIREBASE_PROJECT_ID) as unknown as {
@@ -32,7 +56,7 @@ export async function authRequired(c: AuthContext, next: Next): Promise<Response
       sub?: string;
       user_id?: string;
     };
-    firebaseUid = verified.uid ?? verified.user_id ?? verified.sub ?? null;
+    firebaseUid = resolveFirebaseUid(verified, allowLegacyFallback);
   } catch {
     return c.json({ error: '無効なトークンです' }, 401);
   }
@@ -89,6 +113,7 @@ export async function authOptional(c: AuthContext, next: Next) {
 
     const token = authHeader.slice(7);
     let firebaseUid: string | null = null;
+    const allowLegacyFallback = c.env.ENVIRONMENT !== 'production';
 
     try {
       const verified = await verifyFirebaseToken(token, c.env.FIREBASE_PROJECT_ID) as unknown as {
@@ -96,7 +121,7 @@ export async function authOptional(c: AuthContext, next: Next) {
         sub?: string;
         user_id?: string;
       };
-      firebaseUid = verified.uid ?? verified.user_id ?? verified.sub ?? null;
+      firebaseUid = resolveFirebaseUid(verified, allowLegacyFallback);
     } catch {
       // optional authでは検証失敗時に未認証のまま続行する
     }
