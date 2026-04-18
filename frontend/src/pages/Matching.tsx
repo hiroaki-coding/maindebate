@@ -240,97 +240,41 @@ export function MatchingPage() {
   useEffect(() => {
     let mounted = true;
 
-    const bootstrap = async () => {
+    const ensureIdleOnOpen = async () => {
       try {
         const status = await matchingApi.getStatus();
         if (!mounted) return;
 
-        if (status.status === 'matched') {
-          clearPolling();
-          setViewState('matched');
-          setDebateId(status.debateId ?? null);
-          setTopicExample(status.topicTitle || randomFrom(TOPIC_FALLBACKS));
-          if (status.opponent) {
-            setOpponent({
-              id: status.opponent.id,
-              displayName: status.opponent.displayName,
-              avatarUrl: status.opponent.avatarUrl,
-            });
+        // Matchタブを開いただけでは自動でマッチング再開しない
+        if (status.status !== 'idle') {
+          try {
+            await matchingApi.cancel();
+          } catch {
+            // キャンセル失敗時も画面はアイドル表示を優先
           }
-
-          if (status.debateId) {
-            if (redirectRef.current) {
-              clearTimeout(redirectRef.current);
-            }
-            redirectRef.current = setTimeout(() => {
-              navigate(`/debate/${status.debateId}`);
-            }, 2800);
-          }
-          return;
         }
-
-        if (status.status === 'searching') {
-          setMode(status.mode ?? 'quick');
-          setViewState('searching');
-          setQueueCount(status.queueStats?.activeUsers ?? 0);
-          setAvgWaitSec(status.queueStats?.avgWaitSec ?? 0);
-          setTopicExample(status.topicPreview?.example || randomFrom(TOPIC_FALLBACKS));
-          clearPolling();
-          pollingRef.current = setInterval(async () => {
-            try {
-              const poll = await matchingApi.getStatus();
-              if (poll.status === 'matched') {
-                clearPolling();
-                setViewState('matched');
-                setDebateId(poll.debateId ?? null);
-                setTopicExample(poll.topicTitle || randomFrom(TOPIC_FALLBACKS));
-                if (poll.opponent) {
-                  setOpponent({
-                    id: poll.opponent.id,
-                    displayName: poll.opponent.displayName,
-                    avatarUrl: poll.opponent.avatarUrl,
-                  });
-                }
-
-                if (poll.debateId) {
-                  if (redirectRef.current) {
-                    clearTimeout(redirectRef.current);
-                  }
-                  redirectRef.current = setTimeout(() => {
-                    navigate(`/debate/${poll.debateId}`);
-                  }, 2800);
-                }
-                return;
-              }
-
-              if (poll.status === 'searching') {
-                setQueueCount(poll.queueStats?.activeUsers ?? 0);
-                setAvgWaitSec(poll.queueStats?.avgWaitSec ?? 0);
-                setTopicExample(poll.topicPreview?.example || randomFrom(TOPIC_FALLBACKS));
-                return;
-              }
-
-              setViewState('idle');
-              clearPolling();
-            } catch {
-              clearPolling();
-            }
-          }, 2000);
-          return;
-        }
-
-        setViewState('idle');
       } catch {
-        // 初期読み込み失敗時は手動開始を許可する
+        // 初期確認失敗時も手動開始を許可する
+      } finally {
+        if (mounted) {
+          clearPolling();
+          setViewState('idle');
+          setMode(null);
+          setQueueCount(0);
+          setAvgWaitSec(0);
+          setOpponent(null);
+          setDebateId(null);
+          setDotStep(1);
+        }
       }
     };
 
-    bootstrap();
+    void ensureIdleOnOpen();
 
     return () => {
       mounted = false;
     };
-  }, [clearPolling, navigate]);
+  }, [clearPolling]);
 
   useEffect(() => {
     return () => {
