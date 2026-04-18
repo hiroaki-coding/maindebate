@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '../components/common';
-import { matchingApi, type MatchingResponse } from '../lib/api';
+import { debateApi, matchingApi, type MatchingResponse } from '../lib/api';
 import { useAuthStore } from '../store/authStore';
 
 type MatchMode = 'quick' | 'ranked';
@@ -103,8 +103,25 @@ export function MatchingPage() {
     setTopicExample(payload.topicPreview?.example || randomFrom(TOPIC_FALLBACKS));
   };
 
-  const handleMatched = (payload: MatchingResponse) => {
+  const handleMatched = async (payload: MatchingResponse) => {
     if (!payload.debateId) {
+      return;
+    }
+
+    try {
+      await debateApi.getSnapshot(payload.debateId);
+    } catch {
+      setError('ディベート状態の初期化を確認できませんでした。もう一度マッチングしてください。');
+      setViewState('idle');
+      setMode(null);
+      setOpponent(null);
+      setDebateId(null);
+      setDotStep(1);
+      try {
+        await matchingApi.cancel();
+      } catch {
+        // cleanup failure is non-fatal for UI recovery
+      }
       return;
     }
 
@@ -142,7 +159,7 @@ export function MatchingPage() {
         const status = await matchingApi.getStatus();
 
         if (status.status === 'matched') {
-          handleMatched(status);
+          void handleMatched(status);
           return;
         }
 
@@ -161,6 +178,10 @@ export function MatchingPage() {
   };
 
   const startMatching = async (nextMode: MatchMode) => {
+    if (viewState !== 'idle') {
+      return;
+    }
+
     if (user?.isBanned) {
       setError('BAN中のためマッチングに参加できません');
       return;
@@ -168,14 +189,18 @@ export function MatchingPage() {
 
     setError(null);
     setMode(nextMode);
+    setViewState('searching');
+    setQueueCount(0);
+    setAvgWaitSec(0);
     setOpponent(null);
     setDebateId(null);
+    setDotStep(1);
 
     try {
       const result = await matchingApi.join(nextMode);
 
       if (result.status === 'matched') {
-        handleMatched(result);
+        await handleMatched(result);
         return;
       }
 

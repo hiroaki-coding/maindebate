@@ -283,6 +283,35 @@ app.post('/join', authRequired, async (c) => {
       return c.json({ error: 'BAN中のためマッチングに参加できません' }, 403);
     }
 
+    const { data: selfQueueRaw, error: selfQueueError } = await supabase
+      .from('matching_queue')
+      .select('user_id, joined_at, updated_at, match_mode, status, matched_debate_id, matched_user_id, assigned_side')
+      .eq('user_id', self.id)
+      .maybeSingle();
+
+    if (selfQueueError) {
+      return c.json({ error: selfQueueError.message }, 500);
+    }
+
+    const selfQueue = (selfQueueRaw as QueueRow | null) ?? null;
+    if (selfQueue?.status === 'matched') {
+      const existingMatched = await loadMatchedPayload(supabase, selfQueue);
+      if (existingMatched) {
+        const stats = await getMatchingStats(supabase, normalizeMode(selfQueue.match_mode));
+        return c.json({
+          ...existingMatched,
+          mode: normalizeMode(selfQueue.match_mode),
+          queueStats: stats,
+        });
+      }
+
+      console.error('Invalid matched queue row detected on join; cleaning up', {
+        userId: self.id,
+        matchedDebateId: selfQueue.matched_debate_id,
+      });
+      await supabase.from('matching_queue').delete().eq('user_id', self.id);
+    }
+
     const nowIso = new Date().toISOString();
 
     const { error: upsertError } = await supabase
@@ -353,7 +382,6 @@ app.post('/join', authRequired, async (c) => {
           .update({ status: 'matching', updated_at: new Date().toISOString() })
           .eq('user_id', opponent.id)
           .eq('status', 'searching')
-          .eq('updated_at', candidate.updated_at)
           .select('user_id')
           .maybeSingle();
 
@@ -375,6 +403,15 @@ app.post('/join', authRequired, async (c) => {
             .eq('user_id', opponent.id);
 
           return c.json({ error: '有効な議題がありません。管理者が議題を追加してください' }, 503);
+        }
+
+        const latestOpponent = await getUserById(supabase, opponent.id);
+        if (!latestOpponent || latestOpponent.is_banned) {
+          await supabase
+            .from('matching_queue')
+            .delete()
+            .eq('user_id', opponent.id);
+          continue;
         }
 
         const selfIsPro = Math.random() >= 0.5;
@@ -410,7 +447,7 @@ app.post('/join', authRequired, async (c) => {
         }
 
         const battleStart = new Date().toISOString();
-        const { error: stateInitError } = await supabase
+        const { data: initializedState, error: stateInitError } = await supabase
           .from('debate_state')
           .update({
             status: 'in_progress',
@@ -420,9 +457,11 @@ app.post('/join', authRequired, async (c) => {
             turn_started_at: battleStart,
             updated_at: battleStart,
           })
-          .eq('debate_id', debate.id);
+          .eq('debate_id', debate.id)
+          .select('debate_id')
+          .maybeSingle();
 
-        if (stateInitError) {
+        if (stateInitError || !initializedState) {
           await supabase
             .from('matching_queue')
             .update({
@@ -439,7 +478,7 @@ app.post('/join', authRequired, async (c) => {
             .delete()
             .eq('id', debate.id);
 
-          return c.json({ error: stateInitError.message }, 500);
+          return c.json({ error: stateInitError?.message ?? 'ディベート状態の初期化に失敗しました' }, 500);
         }
 
         const selfSide: DebateSide = selfIsPro ? 'pro' : 'con';
@@ -470,6 +509,30 @@ app.post('/join', authRequired, async (c) => {
         ]);
 
         if (selfQueueUpdate.error || opponentQueueUpdate.error) {
+          await Promise.all([
+            supabase
+              .from('matching_queue')
+              .update({
+                status: 'searching',
+                matched_debate_id: null,
+                matched_user_id: null,
+                assigned_side: null,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('user_id', self.id),
+            supabase
+              .from('matching_queue')
+              .update({
+                status: 'searching',
+                matched_debate_id: null,
+                matched_user_id: null,
+                assigned_side: null,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('user_id', opponent.id),
+            supabase.from('debates').delete().eq('id', debate.id),
+          ]);
+
           return c.json({ error: selfQueueUpdate.error?.message ?? opponentQueueUpdate.error?.message ?? 'マッチ状態の保存に失敗しました' }, 500);
         }
 
@@ -595,6 +658,10 @@ app.get('/status', authRequired, async (c) => {
 
     if (row.status === 'matched') {
       // Debate/state が壊れている古い matched 行は破棄して待機状態に戻す。
+      console.error('Invalid matched queue row detected on status; cleaning up', {
+        userId: authUser.userId,
+        matchedDebateId: row.matched_debate_id,
+      });
       await supabase.from('matching_queue').delete().eq('user_id', authUser.userId);
 
       const stats = await getMatchingStats(supabase, mode);
@@ -650,6 +717,21 @@ app.post('/cancel', authRequired, async (c) => {
 
   try {
     const supabase = getSupabase(c.env);
+
+    const { data: queueRow, error: queueReadError } = await supabase
+      .from('matching_queue')
+      .select('status, matched_debate_id')
+      .eq('user_id', authUser.userId)
+      .maybeSingle();
+
+    if (queueReadError) {
+      return c.json({ error: queueReadError.message }, 500);
+    }
+
+    if (queueRow?.status === 'matched') {
+      return c.json({ error: 'マッチ成立後はキャンセルできません。ディベート画面へ進んでください。' }, 409);
+    }
+
     const { error } = await supabase
       .from('matching_queue')
       .delete()

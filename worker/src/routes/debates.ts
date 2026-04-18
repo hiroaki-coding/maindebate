@@ -564,7 +564,30 @@ async function getDebateContext(
   if (topicRes.error) throw new Error(topicRes.error.message);
   if (usersRes.error) throw new Error(usersRes.error.message);
 
-  if (!stateRes.data || !topicRes.data || !usersRes.data || usersRes.data.length < 2) {
+  let stateData = (stateRes.data as DebateStateRow | null) ?? null;
+  if (!stateData) {
+    const { error: ensureStateError } = await supabase
+      .from('debate_state')
+      .upsert({ debate_id: debateId }, { onConflict: 'debate_id' });
+
+    if (ensureStateError) {
+      throw new Error(ensureStateError.message);
+    }
+
+    const { data: repairedState, error: repairedStateError } = await supabase
+      .from('debate_state')
+      .select('debate_id, status, current_turn, turn_number, started_at, turn_started_at, voting_started_at, pro_votes, con_votes, updated_at')
+      .eq('debate_id', debateId)
+      .maybeSingle();
+
+    if (repairedStateError) {
+      throw new Error(repairedStateError.message);
+    }
+
+    stateData = (repairedState as DebateStateRow | null) ?? null;
+  }
+
+  if (!stateData || !topicRes.data || !usersRes.data || usersRes.data.length < 2) {
     throw new Error('Debate context is incomplete');
   }
 
@@ -578,7 +601,7 @@ async function getDebateContext(
 
   return {
     debate,
-    state: stateRes.data as DebateStateRow,
+    state: stateData,
     topic: topicRes.data as TopicRow,
     proUser,
     conUser,
