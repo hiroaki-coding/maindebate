@@ -11,6 +11,8 @@ import {
 } from '../lib/firebase';
 import { authApi, ApiError } from '../lib/api';
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 interface AuthState {
   // 状態
   user: User | null;
@@ -212,7 +214,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       } catch (error) {
         if (error instanceof ApiError && error.statusCode === 404) {
           // 新規ユーザー
-          set({ isLoading: false });
+          set({ user: null, isLoading: false });
           return { isNewUser: true };
         }
         throw error;
@@ -241,8 +243,43 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       await authApi.register(displayName, birthDate, turnstileToken, honeypot);
 
-      // ユーザー情報を再取得
-      await get().refreshUser();
+      // 直後の読み取りで404になるケースを吸収するため、短いリトライを行う
+      let userData: Awaited<ReturnType<typeof authApi.getMe>> | null = null;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          userData = await authApi.getMe();
+          break;
+        } catch (error) {
+          const isRetryableNotFound = error instanceof ApiError && error.statusCode === 404;
+          if (!isRetryableNotFound || attempt === 3) {
+            throw error;
+          }
+          await sleep(250 * (attempt + 1));
+        }
+      }
+
+      if (!userData) {
+        throw new Error('ユーザー情報の取得に失敗しました');
+      }
+
+      set({
+        user: {
+          id: userData.id,
+          firebaseUid: userData.firebaseUid,
+          displayName: userData.displayName,
+          avatarUrl: userData.avatarUrl,
+          role: userData.role as 'user' | 'admin',
+          rank: userData.rank as User['rank'],
+          points: userData.points,
+          totalDebates: userData.totalDebates,
+          wins: userData.wins,
+          losses: userData.losses,
+          draws: userData.draws,
+          isBanned: userData.isBanned,
+          createdAt: userData.createdAt,
+          updatedAt: userData.createdAt,
+        },
+      });
 
       set({ isLoading: false });
     } catch (error) {

@@ -48,14 +48,29 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
 
 // 未認証ユーザー専用ルートのラッパー
 function PublicOnlyRoute({ children }: { children: React.ReactNode }) {
-  const { user, isLoading, isInitialized } = useAuthStore();
+  const { user, firebaseUser, isLoading, isInitialized } = useAuthStore();
 
-  if (!isInitialized || isLoading) {
+  if (!isInitialized) {
     return (
       <div className="min-h-screen bg-bg-secondary flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent" />
       </div>
     );
+  }
+
+  if (firebaseUser && !firebaseUser.emailVerified && firebaseUser.providerData[0]?.providerId !== 'google.com') {
+    return <Navigate to="/register/verify" replace />;
+  }
+
+  if (firebaseUser && !user) {
+    if (isLoading) {
+      return (
+        <div className="min-h-screen bg-bg-secondary flex items-center justify-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent" />
+        </div>
+      );
+    }
+    return <Navigate to="/register/complete" replace />;
   }
 
   if (user) {

@@ -102,8 +102,7 @@ export function RegisterPage() {
     try {
       const result = await loginWithGoogle();
       if (result.isNewUser) {
-        setAuthMethod('google');
-        setStep('profile');
+        navigate('/register/complete', { replace: true });
       } else {
         // 既存ユーザーはホームへ
         navigate('/');
