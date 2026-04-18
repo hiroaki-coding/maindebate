@@ -11,6 +11,7 @@ type QueueStatus = 'searching' | 'matching' | 'matched';
 type QueueRow = {
   user_id: string;
   joined_at: string;
+  updated_at: string;
   match_mode: MatchingMode;
   status: QueueStatus;
   matched_debate_id: string | null;
@@ -51,6 +52,26 @@ const app = new Hono<{ Bindings: Env; Variables: { user: AuthUser | null; fireba
 
 const getSupabase = (env: Env) => createClient(env.SUPABASE_URL!, env.SUPABASE_SERVICE_KEY!);
 const hasSupabaseConfig = (env: Env) => Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_KEY);
+const SEARCHING_QUEUE_STALE_MS = 45_000;
+const MATCHING_QUEUE_STALE_MS = 20_000;
+const SEARCHING_HEARTBEAT_WRITE_MS = 5_000;
+
+function queueLastSeenMs(row: Pick<QueueRow, 'updated_at' | 'joined_at'>): number {
+  const updatedAtMs = new Date(row.updated_at).getTime();
+  if (!Number.isNaN(updatedAtMs) && updatedAtMs > 0) {
+    return updatedAtMs;
+  }
+  const joinedAtMs = new Date(row.joined_at).getTime();
+  return Number.isNaN(joinedAtMs) ? Date.now() : joinedAtMs;
+}
+
+function isQueueRowStale(
+  row: Pick<QueueRow, 'updated_at' | 'joined_at'>,
+  nowMs: number,
+  ttlMs: number
+): boolean {
+  return nowMs - queueLastSeenMs(row) > ttlMs;
+}
 
 function isMatchingMode(value: string): value is MatchingMode {
   return value === 'quick' || value === 'ranked';
@@ -61,11 +82,13 @@ function normalizeMode(value: string | null | undefined): MatchingMode {
 }
 
 async function getMatchingStats(supabase: ReturnType<typeof getSupabase>, mode: MatchingMode) {
+  const freshThresholdIso = new Date(Date.now() - SEARCHING_QUEUE_STALE_MS).toISOString();
   const { data, error } = await supabase
     .from('matching_queue')
-    .select('joined_at')
+    .select('joined_at, updated_at')
     .eq('match_mode', mode)
     .eq('status', 'searching')
+    .gte('updated_at', freshThresholdIso)
     .limit(200);
 
   if (error) {
@@ -126,8 +149,7 @@ async function getUserById(supabase: ReturnType<typeof getSupabase>, userId: str
 
 async function loadMatchedPayload(
   supabase: ReturnType<typeof getSupabase>,
-  row: QueueRow,
-  self: UserRow
+  row: QueueRow
 ): Promise<MatchedPayload | null> {
   if (
     row.status !== 'matched'
@@ -138,16 +160,25 @@ async function loadMatchedPayload(
     return null;
   }
 
-  const [opponent, debateResult] = await Promise.all([
+  const [opponent, debateResult, debateStateResult] = await Promise.all([
     getUserById(supabase, row.matched_user_id),
     supabase
       .from('debates')
       .select('id, topic_id')
       .eq('id', row.matched_debate_id)
       .maybeSingle(),
+    supabase
+      .from('debate_state')
+      .select('debate_id')
+      .eq('debate_id', row.matched_debate_id)
+      .maybeSingle(),
   ]);
 
   if (debateResult.error || !debateResult.data || !opponent || opponent.is_banned) {
+    return null;
+  }
+
+  if (debateStateResult?.error || !debateStateResult?.data) {
     return null;
   }
 
@@ -278,10 +309,11 @@ app.post('/join', authRequired, async (c) => {
 
     const { data: candidatesRaw, error: candidatesError } = await supabase
       .from('matching_queue')
-      .select('user_id, joined_at, match_mode, status, matched_debate_id, matched_user_id, assigned_side')
+      .select('user_id, joined_at, updated_at, match_mode, status, matched_debate_id, matched_user_id, assigned_side')
       .neq('user_id', self.id)
       .eq('match_mode', mode)
       .eq('status', 'searching')
+      .gte('updated_at', new Date(Date.now() - SEARCHING_QUEUE_STALE_MS).toISOString())
       .order('joined_at', { ascending: true })
       .limit(30);
 
@@ -321,6 +353,7 @@ app.post('/join', authRequired, async (c) => {
           .update({ status: 'matching', updated_at: new Date().toISOString() })
           .eq('user_id', opponent.id)
           .eq('status', 'searching')
+          .eq('updated_at', candidate.updated_at)
           .select('user_id')
           .maybeSingle();
 
@@ -498,7 +531,7 @@ app.get('/status', authRequired, async (c) => {
 
     const { data: rowRaw, error } = await supabase
       .from('matching_queue')
-      .select('user_id, joined_at, match_mode, status, matched_debate_id, matched_user_id, assigned_side')
+      .select('user_id, joined_at, updated_at, match_mode, status, matched_debate_id, matched_user_id, assigned_side')
       .eq('user_id', authUser.userId)
       .maybeSingle();
 
@@ -529,7 +562,28 @@ app.get('/status', authRequired, async (c) => {
       return c.json({ error: 'ユーザーが見つかりません' }, 404);
     }
 
-    const matched = await loadMatchedPayload(supabase, row, self);
+    const nowMs = Date.now();
+    const staleSearching = row.status === 'searching' && isQueueRowStale(row, nowMs, SEARCHING_QUEUE_STALE_MS);
+    const staleMatching = row.status === 'matching' && isQueueRowStale(row, nowMs, MATCHING_QUEUE_STALE_MS);
+
+    if (staleSearching || staleMatching) {
+      await supabase.from('matching_queue').delete().eq('user_id', authUser.userId);
+
+      const stats = await getMatchingStats(supabase, mode);
+      const exampleTopic = await getRandomTopic(supabase);
+
+      return c.json({
+        status: 'idle' as MatchingStatus,
+        mode,
+        queueStats: stats,
+        topicPreview: {
+          label: 'ランダム選択',
+          example: exampleTopic?.title ?? 'AIは人類を超えるべきか？',
+        },
+      });
+    }
+
+    const matched = await loadMatchedPayload(supabase, row);
     if (matched) {
       const stats = await getMatchingStats(supabase, mode);
       return c.json({
@@ -537,6 +591,32 @@ app.get('/status', authRequired, async (c) => {
         mode,
         queueStats: stats,
       });
+    }
+
+    if (row.status === 'matched') {
+      // Debate/state が壊れている古い matched 行は破棄して待機状態に戻す。
+      await supabase.from('matching_queue').delete().eq('user_id', authUser.userId);
+
+      const stats = await getMatchingStats(supabase, mode);
+      const exampleTopic = await getRandomTopic(supabase);
+
+      return c.json({
+        status: 'idle' as MatchingStatus,
+        mode,
+        queueStats: stats,
+        topicPreview: {
+          label: 'ランダム選択',
+          example: exampleTopic?.title ?? 'AIは人類を超えるべきか？',
+        },
+      });
+    }
+
+    if (row.status === 'searching' && nowMs - queueLastSeenMs(row) >= SEARCHING_HEARTBEAT_WRITE_MS) {
+      await supabase
+        .from('matching_queue')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('user_id', authUser.userId)
+        .eq('status', 'searching');
     }
 
     const stats = await getMatchingStats(supabase, mode);
