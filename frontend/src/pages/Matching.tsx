@@ -117,11 +117,6 @@ export function MatchingPage() {
       setOpponent(null);
       setDebateId(null);
       setDotStep(1);
-      try {
-        await matchingApi.cancel();
-      } catch {
-        // cleanup failure is non-fatal for UI recovery
-      }
       return;
     }
 

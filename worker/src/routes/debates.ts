@@ -474,6 +474,17 @@ function isMissingRelationError(error: { code?: string; message?: string } | nul
   return Boolean(error.message?.includes(`relation "${relation}" does not exist`));
 }
 
+function isMissingColumnError(
+  error: { code?: string; message?: string } | null | undefined,
+  table: string,
+  column: string
+): boolean {
+  if (!error) return false;
+  if (error.code === '42703') return true;
+  const message = error.message ?? '';
+  return message.includes(`column ${table}.${column} does not exist`) || message.includes(`column "${column}" does not exist`);
+}
+
 async function recordWatchHeartbeat(
   supabase: ReturnType<typeof getSupabase>,
   debateId: string,
@@ -526,15 +537,36 @@ async function getDebateContext(
   debateId: string,
   viewerUserId: string | null
 ): Promise<DebateContext | null> {
-  const { data: debateData, error: debateError } = await supabase
+  const { data: debateDataRaw, error: debateError } = await supabase
     .from('debates')
     .select('id, topic_id, pro_user_id, con_user_id, max_turns, turn_duration_sec, debate_duration_sec, result, winner_id, ai_judgment, is_hidden, created_at, finished_at')
     .eq('id', debateId)
     .eq('is_hidden', false)
     .maybeSingle();
 
+  let debateData = debateDataRaw;
+
   if (debateError) {
-    throw new Error(debateError.message);
+    if (isMissingColumnError(debateError, 'debates', 'is_hidden')) {
+      const { data: legacyDebateData, error: legacyDebateError } = await supabase
+        .from('debates')
+        .select('id, topic_id, pro_user_id, con_user_id, max_turns, turn_duration_sec, debate_duration_sec, result, winner_id, ai_judgment, created_at, finished_at')
+        .eq('id', debateId)
+        .maybeSingle();
+
+      if (legacyDebateError) {
+        throw new Error(legacyDebateError.message);
+      }
+
+      debateData = legacyDebateData
+        ? {
+            ...legacyDebateData,
+            is_hidden: false,
+          }
+        : null;
+    } else {
+      throw new Error(debateError.message);
+    }
   }
 
   if (!debateData) {

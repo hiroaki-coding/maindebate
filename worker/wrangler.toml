@@ -1,10 +1,10 @@
-name = "debatelive-api"
+name = "maindebate"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-ENVIRONMENT = "development"
+ENVIRONMENT = "maindebate.hiroaki-for-cording.workers.dev"
 WORKER_URL = "http://localhost:8788"
 ENABLE_TEMP_CORS_DOMAINS = "true"
 
