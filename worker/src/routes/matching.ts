@@ -33,6 +33,19 @@ type TopicRow = {
   title: string;
 };
 
+type DebateRow = {
+  id: string;
+  topic_id: string;
+  pro_user_id: string;
+  con_user_id: string;
+  finished_at: string | null;
+};
+
+type DebateStateRow = {
+  debate_id: string;
+  status: 'waiting' | 'matching' | 'in_progress' | 'voting' | 'finished' | 'cancelled';
+};
+
 type MatchedPayload = {
   status: 'matched';
   debateId: string;
@@ -164,12 +177,12 @@ async function loadMatchedPayload(
     getUserById(supabase, row.matched_user_id),
     supabase
       .from('debates')
-      .select('id, topic_id')
+      .select('id, topic_id, pro_user_id, con_user_id, finished_at')
       .eq('id', row.matched_debate_id)
       .maybeSingle(),
     supabase
       .from('debate_state')
-      .select('debate_id')
+      .select('debate_id, status')
       .eq('debate_id', row.matched_debate_id)
       .maybeSingle(),
   ]);
@@ -179,6 +192,19 @@ async function loadMatchedPayload(
   }
 
   if (debateStateResult?.error || !debateStateResult?.data) {
+    return null;
+  }
+
+  const debate = debateResult.data as DebateRow;
+  const debateState = debateStateResult.data as DebateStateRow;
+
+  if (debate.finished_at || debateState.status === 'finished' || debateState.status === 'cancelled') {
+    return null;
+  }
+
+  const includesSelf = debate.pro_user_id === row.user_id || debate.con_user_id === row.user_id;
+  const includesOpponent = debate.pro_user_id === row.matched_user_id || debate.con_user_id === row.matched_user_id;
+  if (!includesSelf || !includesOpponent) {
     return null;
   }
 
@@ -194,7 +220,7 @@ async function loadMatchedPayload(
 
   return {
     status: 'matched',
-    debateId: debateResult.data.id,
+    debateId: debate.id,
     topicId: topic.id,
     topicTitle: topic.title,
     yourSide: row.assigned_side,
@@ -720,7 +746,24 @@ app.post('/cancel', authRequired, async (c) => {
     }
 
     if (queueRow?.status === 'matched') {
-      return c.json({ error: 'マッチ成立後はキャンセルできません。ディベート画面へ進んでください。' }, 409);
+      const matchedDebateId = queueRow.matched_debate_id;
+
+      if (matchedDebateId) {
+        const { data: stateRow, error: stateError } = await supabase
+          .from('debate_state')
+          .select('status')
+          .eq('debate_id', matchedDebateId)
+          .maybeSingle();
+
+        if (stateError) {
+          return c.json({ error: stateError.message }, 500);
+        }
+
+        const isEnded = stateRow?.status === 'finished' || stateRow?.status === 'cancelled';
+        if (!isEnded) {
+          return c.json({ error: 'マッチ成立後はキャンセルできません。ディベート画面へ進んでください。' }, 409);
+        }
+      }
     }
 
     const { error } = await supabase
