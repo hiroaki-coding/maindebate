@@ -69,6 +69,15 @@ export function DebateRoomPage() {
   const commentEndRef = useRef<HTMLDivElement | null>(null);
 
   const mySide = snapshot?.role === 'pro' || snapshot?.role === 'con' ? snapshot.role : null;
+  const isDebater = mySide !== null;
+  const isTurnOwner = Boolean(snapshot && isDebater && snapshot.status === 'in_progress' && snapshot.turn.current === mySide);
+  const isLocked = Boolean(
+    snapshot &&
+      (snapshot.status === 'finished' || snapshot.status === 'cancelled' || snapshot.timers.overallRemainingSec <= 0)
+  );
+  const canSendMessage = Boolean(snapshot && isDebater && isTurnOwner && !isLocked);
+  const canVote = Boolean(snapshot && snapshot.role !== 'guest' && !isLocked);
+  const canComment = Boolean(snapshot && snapshot.role !== 'guest' && !isLocked);
 
   useEffect(() => {
     if (retryAfterSec <= 0) return;
@@ -158,6 +167,13 @@ export function DebateRoomPage() {
   useEffect(() => {
     refreshSnapshot();
   }, [refreshSnapshot]);
+
+  useEffect(() => {
+    if (!snapshot || !debateId) return;
+    if (snapshot.role === 'spectator' || snapshot.role === 'guest') {
+      navigate(`/feed?debateId=${debateId}`, { replace: true });
+    }
+  }, [snapshot, debateId, navigate]);
 
   useEffect(() => {
     if (!debateId) return;
@@ -282,7 +298,7 @@ export function DebateRoomPage() {
 
   const handleVote = async (side: 'pro' | 'con') => {
     if (!debateId || !snapshot) return;
-    if (!snapshot.canVote) return;
+    if (!canVote) return;
 
     const now = Date.now();
     if (now - lastVotedAt < 2000) {
@@ -306,7 +322,7 @@ export function DebateRoomPage() {
 
   const handleSendComment = async () => {
     if (!debateId || !snapshot) return;
-    if (!snapshot.canComment) return;
+    if (!canComment) return;
 
     const content = normalizeContent(commentInput);
     if (!content) return;
@@ -373,8 +389,8 @@ export function DebateRoomPage() {
     return { pro, con };
   }, [snapshot]);
 
-  const isMessageInputDisabled = !snapshot?.canSendMessage || isSubmittingMessage;
-  const isCommentDisabled = !snapshot?.canComment || isSubmittingComment;
+  const isMessageInputDisabled = !canSendMessage || isSubmittingMessage;
+  const isCommentDisabled = !canComment || isSubmittingComment;
 
   if (!debateId) {
     return (
@@ -453,7 +469,7 @@ export function DebateRoomPage() {
             type="text"
             value={commentInput}
             onChange={(e) => setCommentInput(e.target.value)}
-            placeholder={snapshot.canComment ? 'コメントを送信' : 'コメントは終了しました'}
+            placeholder={canComment ? 'コメントを送信' : 'コメントは終了しました'}
             className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-[#D93025]"
             disabled={isCommentDisabled}
             maxLength={200}
@@ -595,13 +611,13 @@ export function DebateRoomPage() {
       <footer className="fixed bottom-0 left-0 right-0 z-50 border-t border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-7xl px-3 py-3 md:px-5">
           <div className="space-y-3">
-            {snapshot.isDebater && (
+            {isDebater && (
               <div className="flex items-center justify-between">
                 <p className={`text-sm font-medium ${snapshot.timers.dangerTurn ? 'text-[#D93025] animate-pulse' : 'text-slate-600'}`}>
                   ターンタイマー: {formatTurnSec(snapshot.timers.turnRemainingSec)}
                 </p>
                 <p className="text-xs text-slate-500">
-                  {snapshot.isTurnOwner ? 'あなたのターンです' : '相手のターンです'}
+                  {isTurnOwner ? 'あなたのターンです' : '相手のターンです'}
                 </p>
               </div>
             )}
@@ -638,7 +654,7 @@ export function DebateRoomPage() {
                 <button
                   type="button"
                   onClick={() => handleVote('pro')}
-                  disabled={!snapshot.canVote}
+                  disabled={!canVote}
                   className="flex-1 rounded-lg border border-[#F5C4C1] bg-[#FDE8E7] py-2 text-sm font-semibold text-[#D93025] transition hover:bg-[#f9dcd9] disabled:opacity-50"
                 >
                   賛成に投票
@@ -646,7 +662,7 @@ export function DebateRoomPage() {
                 <button
                   type="button"
                   onClick={() => handleVote('con')}
-                  disabled={!snapshot.canVote}
+                  disabled={!canVote}
                   className="flex-1 rounded-lg border border-slate-300 bg-[#F0F0F0] py-2 text-sm font-semibold text-[#555555] transition hover:bg-slate-200 disabled:opacity-50"
                 >
                   反対に投票
@@ -655,22 +671,22 @@ export function DebateRoomPage() {
             </div>
 
             <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
-              {snapshot.isDebater ? (
+              {isDebater ? (
                 <>
                   <div
                     className={`rounded-xl border px-2 py-2 transition ${
-                      snapshot.isTurnOwner
+                      isTurnOwner
                         ? 'border-[#D93025]/60 shadow-[0_0_0_2px_rgba(217,48,37,0.2)]'
                         : 'border-slate-200 bg-slate-50'
                     }`}
                   >
-                    <p className={`mb-1 text-xs font-medium ${snapshot.isTurnOwner ? 'text-[#D93025]' : 'text-slate-500'}`}>
-                      {snapshot.isTurnOwner ? 'あなたのターンです' : '相手のターンです'}
+                    <p className={`mb-1 text-xs font-medium ${isTurnOwner ? 'text-[#D93025]' : 'text-slate-500'}`}>
+                      {isTurnOwner ? 'あなたのターンです' : '相手のターンです'}
                     </p>
                     <textarea
                       value={messageInput}
                       onChange={(e) => setMessageInput(e.target.value)}
-                      placeholder={snapshot.isTurnOwner ? '10〜200文字で発言を入力' : '相手のターン中は入力できません'}
+                      placeholder={isTurnOwner ? '10〜200文字で発言を入力' : '相手のターン中は入力できません'}
                       className="h-20 w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-[#D93025] disabled:bg-slate-100"
                       disabled={isMessageInputDisabled}
                       maxLength={200}
@@ -688,7 +704,7 @@ export function DebateRoomPage() {
                 </>
               ) : (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">
-                  観覧モードです。投票とコメントで参加できます。
+                  フィードへ移動しています...
                 </div>
               )}
             </div>

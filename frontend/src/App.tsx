@@ -316,7 +316,9 @@ function App() {
         <Route
           path="/debate/:debateId"
           element={
-            <DebateRoomPage />
+            <PrivateRoute>
+              <DebateRoomPage />
+            </PrivateRoute>
           }
         />
 
