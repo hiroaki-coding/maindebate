@@ -40,6 +40,7 @@ type DebateStateRow = {
 type TopicRow = {
   id: string;
   title: string;
+  description: string | null;
   pro_label: string;
   con_label: string;
 };
@@ -583,7 +584,7 @@ async function getDebateContext(
       .maybeSingle(),
     supabase
       .from('topics')
-      .select('id, title, pro_label, con_label')
+      .select('id, title, description, pro_label, con_label')
       .eq('id', debate.topic_id)
       .maybeSingle(),
     supabase
@@ -642,13 +643,21 @@ async function getDebateContext(
   };
 }
 
-async function ensureDebateStarted(
+async function ensureInProgressStateInitialized(
   supabase: ReturnType<typeof getSupabase>,
   context: DebateContext,
   nowIso: string
 ): Promise<DebateStateRow> {
   const current = context.state;
-  const needsInit = !current.started_at || !current.turn_started_at || !current.current_turn || current.status === 'waiting' || current.status === 'matching';
+  if (current.status !== 'in_progress') {
+    return current;
+  }
+
+  const needsInit =
+    !current.started_at
+    || !current.turn_started_at
+    || !current.current_turn
+    || current.turn_number <= 0;
 
   if (!needsInit) {
     return current;
@@ -1213,11 +1222,19 @@ async function advanceDebate(
 ): Promise<{ state: DebateStateRow; finalResult?: FinalResultPayload }> {
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
-  let state = await ensureDebateStarted(supabase, context, nowIso);
+  let state = await ensureInProgressStateInitialized(supabase, context, nowIso);
+
+  if (state.status === 'waiting' || state.status === 'matching') {
+    return { state };
+  }
 
   if (state.status === 'finished' || state.status === 'cancelled') {
     const parsed = await parseAiJudgment(context.debate.ai_judgment);
     return { state, finalResult: parsed ?? undefined };
+  }
+
+  if (state.status !== 'in_progress') {
+    return { state };
   }
 
   const turnDuration = context.debate.turn_duration_sec || 20;
@@ -1344,7 +1361,9 @@ async function buildSnapshotPayload(
   const voteTotal = (advancedState.pro_votes ?? 0) + (advancedState.con_votes ?? 0);
   const isDebater = context.viewerRole === 'pro' || context.viewerRole === 'con';
   const isTurnOwner = isDebater && context.viewerRole === advancedState.current_turn;
-  const locked = advancedState.status === 'finished' || advancedState.status === 'cancelled' || overallRemainingSec <= 0;
+  const debateActive = advancedState.status === 'in_progress';
+  const canStartDebate = isDebater && (advancedState.status === 'waiting' || advancedState.status === 'matching');
+  const locked = !debateActive || advancedState.status === 'finished' || advancedState.status === 'cancelled' || overallRemainingSec <= 0;
 
   const parsedResult = finalResult ?? (await parseAiJudgment(context.debate.ai_judgment));
   const viewerCount = await getActiveViewerCount(supabase, context.debate.id);
@@ -1355,6 +1374,7 @@ async function buildSnapshotPayload(
     topic: {
       id: context.topic.id,
       title: context.topic.title,
+      description: context.topic.description,
       proLabel: context.topic.pro_label,
       conLabel: context.topic.con_label,
     },
@@ -1362,9 +1382,10 @@ async function buildSnapshotPayload(
     role: context.viewerRole,
     isDebater,
     isTurnOwner,
-    canSendMessage: isDebater && isTurnOwner && !locked,
-    canVote: context.viewerRole !== 'guest' && !locked,
-    canComment: context.viewerRole !== 'guest' && !locked,
+    canSendMessage: isDebater && isTurnOwner && debateActive && !locked,
+    canVote: debateActive && context.viewerRole !== 'guest' && !locked,
+    canComment: debateActive && context.viewerRole !== 'guest' && !locked,
+    canStartDebate,
     timers: {
       overallRemainingSec,
       turnRemainingSec,
@@ -1601,6 +1622,82 @@ app.get('/:debateId/tick', authOptional, async (c) => {
   }
 });
 
+app.post('/:debateId/start', authRequired, async (c) => {
+  if (!hasSupabaseConfig(c.env)) {
+    return c.json({ error: 'Supabase credentials are not configured' }, 500);
+  }
+
+  const debateId = c.req.param('debateId');
+  if (!debateId) {
+    return c.json({ error: 'debateId is required' }, 400);
+  }
+
+  const authUser = c.get('user');
+  const userId = typeof authUser?.userId === 'string' ? authUser.userId : null;
+
+  if (!authUser || !userId) {
+    return c.json({ error: 'ユーザー情報が未登録です' }, 400);
+  }
+
+  try {
+    const supabase = getSupabase(c.env);
+    const context = await getDebateContext(supabase, debateId, userId);
+
+    if (!context) {
+      return c.json({ error: 'Debate not found' }, 404);
+    }
+
+    const role = resolveViewerRole(userId, context.debate);
+    if (role !== 'pro' && role !== 'con') {
+      return c.json({ error: '対戦者のみ開始できます' }, 403);
+    }
+
+    if (context.state.status === 'finished' || context.state.status === 'cancelled') {
+      return c.json({ error: 'このディベートはすでに終了しています' }, 400);
+    }
+
+    const nowIso = new Date().toISOString();
+    const { data: startedState, error: startError } = await supabase
+      .from('debate_state')
+      .update({
+        status: 'in_progress',
+        current_turn: context.state.current_turn ?? 'pro',
+        turn_number: context.state.turn_number > 0 ? context.state.turn_number : 1,
+        started_at: context.state.started_at ?? nowIso,
+        turn_started_at: context.state.turn_started_at ?? nowIso,
+        updated_at: nowIso,
+      })
+      .eq('debate_id', debateId)
+      .select('debate_id, status, current_turn, turn_number, started_at, turn_started_at, voting_started_at, pro_votes, con_votes, updated_at')
+      .single();
+
+    if (startError) {
+      throw new Error(startError.message);
+    }
+
+    await publishRealtimeEvent(c.env, debateId, {
+      type: 'state:update',
+      source: 'start',
+      status: 'in_progress',
+      currentTurn: startedState.current_turn,
+      turnNumber: startedState.turn_number,
+    });
+
+    return c.json({
+      started: true,
+      status: startedState.status,
+      currentTurn: startedState.current_turn,
+      turnNumber: startedState.turn_number,
+      startedAt: startedState.started_at,
+      turnStartedAt: startedState.turn_started_at,
+    });
+  } catch (error) {
+    console.error('Debate start error:', error);
+    addCorsToResponse(c);
+    return c.json({ error: 'ディベート開始に失敗しました' }, 500);
+  }
+});
+
 app.post('/:debateId/heartbeat', authRequired, async (c) => {
   if (!hasSupabaseConfig(c.env)) {
     return c.json({ error: 'Supabase credentials are not configured' }, 500);
@@ -1670,6 +1767,10 @@ app.post('/:debateId/message', authRequired, async (c) => {
     }
 
     const { state } = await advanceDebate(c.env, supabase, context);
+
+    if (state.status === 'waiting' || state.status === 'matching') {
+      return c.json({ error: 'ディベートはまだ開始されていません' }, 400);
+    }
 
     if (state.status !== 'in_progress') {
       return c.json({ error: 'ディベートは終了しています' }, 400);
@@ -1790,6 +1891,10 @@ app.post('/:debateId/vote', authRequired, async (c) => {
     }
 
     const { state } = await advanceDebate(c.env, supabase, context);
+    if (state.status === 'waiting' || state.status === 'matching') {
+      return c.json({ error: 'ディベート開始後に投票できます' }, 400);
+    }
+
     if (state.status === 'finished' || state.status === 'cancelled') {
       return c.json({ error: 'ディベートは終了しています' }, 400);
     }
@@ -1915,6 +2020,10 @@ app.post('/:debateId/comment', authRequired, async (c) => {
     }
 
     const { state } = await advanceDebate(c.env, supabase, context);
+    if (state.status === 'waiting' || state.status === 'matching') {
+      return c.json({ error: 'ディベート開始後にコメントできます' }, 400);
+    }
+
     if (state.status === 'finished' || state.status === 'cancelled') {
       return c.json({ error: 'ディベートは終了しています' }, 400);
     }

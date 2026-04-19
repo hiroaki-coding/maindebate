@@ -446,19 +446,10 @@ app.post('/join', authRequired, async (c) => {
           return c.json({ error: createDebateError?.message ?? 'ディベート作成に失敗しました' }, 500);
         }
 
-        const battleStart = new Date().toISOString();
         const { data: initializedState, error: stateInitError } = await supabase
           .from('debate_state')
-          .update({
-            status: 'in_progress',
-            current_turn: 'pro',
-            turn_number: 1,
-            started_at: battleStart,
-            turn_started_at: battleStart,
-            updated_at: battleStart,
-          })
-          .eq('debate_id', debate.id)
           .select('debate_id')
+          .eq('debate_id', debate.id)
           .maybeSingle();
 
         if (stateInitError || !initializedState) {

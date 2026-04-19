@@ -63,21 +63,29 @@ export function DebateRoomPage() {
   const [reportReason, setReportReason] = useState<ReportReason>('spam');
   const [reportDetail, setReportDetail] = useState('');
   const [reporting, setReporting] = useState(false);
+  const [isStartingDebate, setIsStartingDebate] = useState(false);
 
   const previousTurnRef = useRef<string | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const commentEndRef = useRef<HTMLDivElement | null>(null);
+  const snapshotRef = useRef<DebateSnapshot | null>(null);
 
   const mySide = snapshot?.role === 'pro' || snapshot?.role === 'con' ? snapshot.role : null;
   const isDebater = mySide !== null;
+  const isInProgress = snapshot?.status === 'in_progress';
   const isTurnOwner = Boolean(snapshot && isDebater && snapshot.status === 'in_progress' && snapshot.turn.current === mySide);
   const isLocked = Boolean(
     snapshot &&
       (snapshot.status === 'finished' || snapshot.status === 'cancelled' || snapshot.timers.overallRemainingSec <= 0)
   );
   const canSendMessage = Boolean(snapshot && isDebater && isTurnOwner && !isLocked);
-  const canVote = Boolean(snapshot && snapshot.role !== 'guest' && !isLocked);
-  const canComment = Boolean(snapshot && snapshot.role !== 'guest' && !isLocked);
+  const canVote = Boolean(snapshot && isInProgress && snapshot.role !== 'guest' && !isLocked);
+  const canComment = Boolean(snapshot && isInProgress && snapshot.role !== 'guest' && !isLocked);
+  const canStartDebate = Boolean(
+    snapshot &&
+      isDebater &&
+      (snapshot.canStartDebate || snapshot.status === 'waiting' || snapshot.status === 'matching')
+  );
 
   useEffect(() => {
     if (retryAfterSec <= 0) return;
@@ -124,6 +132,7 @@ export function DebateRoomPage() {
 
   useEffect(() => {
     if (!snapshot) return;
+    snapshotRef.current = snapshot;
     applyTurnNotification(snapshot);
   }, [snapshot, applyTurnNotification]);
 
@@ -181,6 +190,7 @@ export function DebateRoomPage() {
     const tickId = setInterval(async () => {
       try {
         const tick = await debateApi.tick(debateId);
+        const prevSnapshot = snapshotRef.current;
         setSnapshot((prev) => {
           if (!prev) return prev;
           return {
@@ -207,6 +217,17 @@ export function DebateRoomPage() {
             result: tick.result ?? prev.result,
           };
         });
+
+        if (
+          prevSnapshot &&
+          (
+            prevSnapshot.turn.number !== tick.turnNumber ||
+            prevSnapshot.turn.current !== tick.currentTurn ||
+            prevSnapshot.status !== tick.status
+          )
+        ) {
+          await refreshSnapshot();
+        }
       } catch {
         // tickの失敗は一時的な通信エラーとして扱う
       }
@@ -224,7 +245,17 @@ export function DebateRoomPage() {
       clearInterval(tickId);
       clearInterval(heartbeatId);
     };
-  }, [debateId]);
+  }, [debateId, refreshSnapshot]);
+
+  useEffect(() => {
+    if (!debateId || !isInProgress) return;
+
+    const syncId = setInterval(() => {
+      void refreshSnapshot();
+    }, 3000);
+
+    return () => clearInterval(syncId);
+  }, [debateId, isInProgress, refreshSnapshot]);
 
   useEffect(() => {
     if (!debateId || !supabaseRealtime) return;
@@ -317,6 +348,23 @@ export function DebateRoomPage() {
       }
       const message = voteError instanceof Error ? voteError.message : '投票に失敗しました';
       setFlash({ type: 'error', text: message });
+    }
+  };
+
+  const handleStartDebate = async () => {
+    if (!debateId || !canStartDebate || isStartingDebate) return;
+
+    setIsStartingDebate(true);
+    try {
+      await debateApi.startDebate(debateId);
+      await refreshSnapshot();
+      setFlash({ type: 'info', text: 'ディベートを開始しました' });
+      setTimeout(() => setFlash(null), 1500);
+    } catch (startError) {
+      const message = startError instanceof Error ? startError.message : 'ディベート開始に失敗しました';
+      setFlash({ type: 'error', text: message });
+    } finally {
+      setIsStartingDebate(false);
     }
   };
 
@@ -424,6 +472,13 @@ export function DebateRoomPage() {
     : snapshot.turn.current === 'con'
       ? snapshot.participants.con.displayName
       : '---';
+  const commentPlaceholder = canComment
+    ? 'コメントを送信'
+    : snapshot.status === 'finished' || snapshot.status === 'cancelled'
+      ? 'コメントは終了しました'
+      : 'ディベート開始後にコメントできます';
+  const showStartOverlay = isDebater && (snapshot.status === 'waiting' || snapshot.status === 'matching');
+  const mySideLabel = mySide === 'pro' ? '賛成' : mySide === 'con' ? '反対' : '---';
 
   const showResultOverlay = snapshot.status === 'finished' && snapshot.result;
 
@@ -469,7 +524,7 @@ export function DebateRoomPage() {
             type="text"
             value={commentInput}
             onChange={(e) => setCommentInput(e.target.value)}
-            placeholder={canComment ? 'コメントを送信' : 'コメントは終了しました'}
+            placeholder={commentPlaceholder}
             className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-[#D93025]"
             disabled={isCommentDisabled}
             maxLength={200}
@@ -617,7 +672,7 @@ export function DebateRoomPage() {
                   ターンタイマー: {formatTurnSec(snapshot.timers.turnRemainingSec)}
                 </p>
                 <p className="text-xs text-slate-500">
-                  {isTurnOwner ? 'あなたのターンです' : '相手のターンです'}
+                  {snapshot.status !== 'in_progress' ? '開始待ちです' : isTurnOwner ? 'あなたのターンです' : '相手のターンです'}
                 </p>
               </div>
             )}
@@ -681,12 +736,18 @@ export function DebateRoomPage() {
                     }`}
                   >
                     <p className={`mb-1 text-xs font-medium ${isTurnOwner ? 'text-[#D93025]' : 'text-slate-500'}`}>
-                      {isTurnOwner ? 'あなたのターンです' : '相手のターンです'}
+                      {snapshot.status !== 'in_progress' ? '開始待ちです' : isTurnOwner ? 'あなたのターンです' : '相手のターンです'}
                     </p>
                     <textarea
                       value={messageInput}
                       onChange={(e) => setMessageInput(e.target.value)}
-                      placeholder={isTurnOwner ? '10〜200文字で発言を入力' : '相手のターン中は入力できません'}
+                      placeholder={
+                        snapshot.status !== 'in_progress'
+                          ? '開始後に発言できます'
+                          : isTurnOwner
+                            ? '10〜200文字で発言を入力'
+                            : '相手のターン中は入力できません'
+                      }
                       className="h-20 w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-[#D93025] disabled:bg-slate-100"
                       disabled={isMessageInputDisabled}
                       maxLength={200}
@@ -844,6 +905,40 @@ export function DebateRoomPage() {
 
             <div className="mt-5 text-center">
               <Button onClick={() => navigate('/matching')}>次の試合を探す</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showStartOverlay && (
+        <div className="fixed inset-0 z-[88] grid place-items-center bg-black/45 p-4">
+          <div className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <p className="text-xs font-semibold tracking-wide text-[#D93025]">DEBATE BRIEF</p>
+            <h2 className="mt-2 text-xl font-bold text-slate-800">{snapshot.topic.title}</h2>
+            <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-sm leading-relaxed text-slate-600">
+              {snapshot.topic.description?.trim() || '議題の説明はありません。タイトルと立場を確認して開始してください。'}
+            </p>
+
+            <div className="mt-4 grid gap-2 text-sm md:grid-cols-2">
+              <div className="rounded-lg border border-[#F5C4C1] bg-[#FDE8E7] px-3 py-2 text-[#7A1D18]">
+                賛成側: {snapshot.topic.proLabel}
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-[#F0F0F0] px-3 py-2 text-slate-700">
+                反対側: {snapshot.topic.conLabel}
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-lg border border-[#D93025]/25 bg-[#D93025]/5 px-3 py-2 text-sm font-semibold text-[#B52A1E]">
+              あなたの担当: {mySideLabel}
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <Button
+                onClick={handleStartDebate}
+                disabled={!canStartDebate || isStartingDebate}
+              >
+                {isStartingDebate ? '開始中...' : 'ディベート開始'}
+              </Button>
             </div>
           </div>
         </div>

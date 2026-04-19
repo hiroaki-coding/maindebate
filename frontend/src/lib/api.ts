@@ -175,6 +175,7 @@ export interface DebateSnapshot {
   topic: {
     id: string;
     title: string;
+    description?: string | null;
     proLabel: string;
     conLabel: string;
   };
@@ -185,6 +186,7 @@ export interface DebateSnapshot {
   canSendMessage: boolean;
   canVote: boolean;
   canComment: boolean;
+  canStartDebate: boolean;
   timers: {
     overallRemainingSec: number;
     turnRemainingSec: number;
@@ -288,6 +290,19 @@ export interface DebateTick {
 export const debateApi = {
   getSnapshot: (debateId: string) =>
     request<DebateSnapshot>(`/api/debates/${debateId}/snapshot`, { optionalAuth: true }),
+
+  startDebate: (debateId: string) =>
+    request<{
+      started: boolean;
+      status: DebateSnapshot['status'];
+      currentTurn: 'pro' | 'con' | null;
+      turnNumber: number;
+      startedAt: string | null;
+      turnStartedAt: string | null;
+    }>(`/api/debates/${debateId}/start`, {
+      method: 'POST',
+      requireAuth: true,
+    }),
 
   tick: (debateId: string) =>
     request<DebateTick>(`/api/debates/${debateId}/tick`, { optionalAuth: true }),
