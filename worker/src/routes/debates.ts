@@ -1785,6 +1785,20 @@ app.post('/:debateId/message', authRequired, async (c) => {
       return c.json({ error: 'あなたのターンではありません' }, 400);
     }
 
+    const { data: existingTurnMessage, error: existingTurnMessageError } = await supabase
+      .from('debate_messages')
+      .select('id')
+      .eq('debate_id', debateId)
+      .eq('side', role)
+      .eq('turn_number', state.turn_number)
+      .limit(1)
+      .maybeSingle();
+
+    if (existingTurnMessageError) throw new Error(existingTurnMessageError.message);
+    if (existingTurnMessage) {
+      return c.json({ error: 'このターンの発言はすでに送信されています' }, 409);
+    }
+
     const { data: latestRaw, error: latestError } = await supabase
       .from('debate_messages')
       .select('content')
@@ -1814,24 +1828,38 @@ app.post('/:debateId/message', authRequired, async (c) => {
 
     if (insertError) throw new Error(insertError.message);
 
+    const nextTurn = toggleSide(role);
     const nowIso = new Date().toISOString();
-    const { error: stateError } = await supabase
+    const { data: stateUpdated, error: stateError } = await supabase
       .from('debate_state')
       .update({
-        current_turn: toggleSide(role),
+        current_turn: nextTurn,
         turn_number: state.turn_number + 1,
         turn_started_at: nowIso,
         updated_at: nowIso,
       })
-      .eq('debate_id', debateId);
+      .eq('debate_id', debateId)
+      .eq('status', 'in_progress')
+      .eq('current_turn', role)
+      .eq('turn_number', state.turn_number)
+      .select('debate_id')
+      .maybeSingle();
 
-    if (stateError) throw new Error(stateError.message);
+    if (stateError) {
+      await supabase.from('debate_messages').delete().eq('id', inserted.id);
+      throw new Error(stateError.message);
+    }
+
+    if (!stateUpdated) {
+      await supabase.from('debate_messages').delete().eq('id', inserted.id);
+      return c.json({ error: 'ターン更新が発生したため、再送信してください' }, 409);
+    }
 
     await publishRealtimeEvent(c.env, debateId, {
       type: 'message:new',
       source: 'message',
       status: 'in_progress',
-      currentTurn: toggleSide(role),
+      currentTurn: nextTurn,
       turnNumber: state.turn_number + 1,
       payload: {
         id: inserted.id,
@@ -1844,7 +1872,7 @@ app.post('/:debateId/message', authRequired, async (c) => {
 
     return c.json({
       message: inserted,
-      nextTurn: toggleSide(role),
+      nextTurn: nextTurn,
       nextTurnNumber: state.turn_number + 1,
     });
   } catch (error) {

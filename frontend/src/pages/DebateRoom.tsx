@@ -42,6 +42,16 @@ function rankLabel(rank: string): string {
   return rank.toUpperCase();
 }
 
+function isNearBottom(element: HTMLElement, thresholdPx = 96): boolean {
+  const remaining = element.scrollHeight - element.scrollTop - element.clientHeight;
+  return remaining <= thresholdPx;
+}
+
+function scrollToBottom(element: HTMLElement | null): void {
+  if (!element) return;
+  element.scrollTo({ top: element.scrollHeight, behavior: 'auto' });
+}
+
 export function DebateRoomPage() {
   const { debateId } = useParams<{ debateId: string }>();
   const navigate = useNavigate();
@@ -66,9 +76,11 @@ export function DebateRoomPage() {
   const [isStartingDebate, setIsStartingDebate] = useState(false);
 
   const previousTurnRef = useRef<string | null>(null);
-  const messageEndRef = useRef<HTMLDivElement | null>(null);
-  const commentEndRef = useRef<HTMLDivElement | null>(null);
   const snapshotRef = useRef<DebateSnapshot | null>(null);
+  const messageScrollRef = useRef<HTMLDivElement | null>(null);
+  const commentScrollRef = useRef<HTMLDivElement | null>(null);
+  const shouldFollowMessageRef = useRef(true);
+  const shouldFollowCommentRef = useRef(true);
 
   const mySide = snapshot?.role === 'pro' || snapshot?.role === 'con' ? snapshot.role : null;
   const isDebater = mySide !== null;
@@ -166,12 +178,19 @@ export function DebateRoomPage() {
   }, [snapshot]);
 
   useEffect(() => {
-    messageEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    if (!shouldFollowMessageRef.current) return;
+    scrollToBottom(messageScrollRef.current);
   }, [snapshot?.messages.length]);
 
   useEffect(() => {
-    commentEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    if (!shouldFollowCommentRef.current) return;
+    scrollToBottom(commentScrollRef.current);
   }, [snapshot?.comments.length]);
+
+  useEffect(() => {
+    shouldFollowMessageRef.current = true;
+    shouldFollowCommentRef.current = true;
+  }, [debateId]);
 
   useEffect(() => {
     refreshSnapshot();
@@ -314,6 +333,7 @@ export function DebateRoomPage() {
     }
 
     setIsSubmittingMessage(true);
+    shouldFollowMessageRef.current = true;
     try {
       await debateApi.sendMessage(debateId, content);
       setMessageInput('');
@@ -376,6 +396,7 @@ export function DebateRoomPage() {
     if (!content) return;
 
     setIsSubmittingComment(true);
+    shouldFollowCommentRef.current = true;
     try {
       await debateApi.sendComment(debateId, content);
       setCommentInput('');
@@ -426,6 +447,18 @@ export function DebateRoomPage() {
       setReporting(false);
     }
   };
+
+  const handleMessageScroll = useCallback(() => {
+    const container = messageScrollRef.current;
+    if (!container) return;
+    shouldFollowMessageRef.current = isNearBottom(container);
+  }, []);
+
+  const handleCommentScroll = useCallback(() => {
+    const container = commentScrollRef.current;
+    if (!container) return;
+    shouldFollowCommentRef.current = isNearBottom(container);
+  }, []);
 
   const voteRatios = useMemo(() => {
     if (!snapshot || snapshot.votes.total === 0) {
@@ -489,7 +522,11 @@ export function DebateRoomPage() {
         <p className="text-xs text-slate-500">{snapshot.metrics.commentCount}件</p>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 min-h-[220px]">
+      <div
+        ref={commentScrollRef}
+        onScroll={handleCommentScroll}
+        className="flex-1 overflow-y-auto overscroll-contain px-3 py-3 space-y-3 min-h-[220px]"
+      >
         {snapshot.comments.length === 0 ? (
           <div className="h-full grid place-items-center text-sm text-slate-400">
             コメントを待機中...
@@ -515,7 +552,6 @@ export function DebateRoomPage() {
             </div>
           ))
         )}
-        <div ref={commentEndRef} />
       </div>
 
       <div className="border-t border-slate-100 p-3">
@@ -626,7 +662,11 @@ export function DebateRoomPage() {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+          <div
+            ref={messageScrollRef}
+            onScroll={handleMessageScroll}
+            className="flex-1 overflow-y-auto overscroll-contain px-4 py-4 space-y-4"
+          >
             {snapshot.messages.length === 0 ? (
               <div className="grid h-full min-h-[260px] place-items-center text-sm text-slate-400">
                 まだ発言がありません
@@ -654,7 +694,6 @@ export function DebateRoomPage() {
                 );
               })
             )}
-            <div ref={messageEndRef} />
           </div>
         </section>
 
