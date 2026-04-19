@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Navigate } from 'react-router-dom';
 import { ApiError, adminApi } from '../lib/api';
 
 type TabKey = 'dashboard' | 'users' | 'topics' | 'reports' | 'settings' | 'logs';
@@ -246,14 +247,7 @@ export function AdminDashboardPage() {
   }
 
   if (phase === 'denied') {
-    return (
-      <div className="min-h-screen bg-[#f5f4f0] px-4 py-10">
-        <div className="mx-auto max-w-xl rounded-2xl border border-red-200 bg-white p-8 text-center shadow-sm">
-          <h1 className="text-xl font-bold text-red-700">アクセス拒否</h1>
-          <p className="mt-3 text-sm text-slate-600">このページは管理者専用です。操作は記録されています。</p>
-        </div>
-      </div>
-    );
+    return <Navigate to="/" replace />;
   }
 
   if (phase === 'login') {

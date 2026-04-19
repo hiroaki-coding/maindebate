@@ -159,12 +159,14 @@ export async function authOptional(c: AuthContext, next: Next) {
 // 管理者専用ミドルウェア
 export async function adminRequired(c: AuthContext, next: Next): Promise<Response | void> {
   const authResult = await authRequired(c, async () => {});
-  if (authResult) return authResult;
+  if (authResult) {
+    return c.json({ error: 'Not found' }, 404);
+  }
 
   const user = c.get('user');
 
   if (!user || user.role !== 'admin') {
-    return c.json({ error: '管理者権限が必要です' }, 403);
+    return c.json({ error: 'Not found' }, 404);
   }
 
   await next();
