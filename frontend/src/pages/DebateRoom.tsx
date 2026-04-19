@@ -7,6 +7,11 @@ import { useAuthStore } from '../store/authStore';
 
 type FlashMessage = { type: 'info' | 'error'; text: string } | null;
 type ReportReason = 'spam' | 'harassment' | 'discrimination' | 'other';
+type TickerItem = {
+  id: string;
+  text: string;
+  durationMs: number;
+};
 
 function formatClock(totalSec: number): string {
   const sec = Math.max(0, totalSec);
@@ -42,14 +47,20 @@ function rankLabel(rank: string): string {
   return rank.toUpperCase();
 }
 
-function isNearBottom(element: HTMLElement, thresholdPx = 96): boolean {
-  const remaining = element.scrollHeight - element.scrollTop - element.clientHeight;
-  return remaining <= thresholdPx;
+function clampText(value: string, max: number): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 3)}...`;
 }
 
-function scrollToBottom(element: HTMLElement | null): void {
+function tickerDurationMs(text: string): number {
+  const len = text.length;
+  const sec = Math.min(10, Math.max(5.8, 5.2 + len / 26));
+  return Math.round(sec * 1000);
+}
+
+function scrollToBottom(element: HTMLElement | null, behavior: ScrollBehavior = 'auto'): void {
   if (!element) return;
-  element.scrollTo({ top: element.scrollHeight, behavior: 'auto' });
+  element.scrollTo({ top: element.scrollHeight, behavior });
 }
 
 export function DebateRoomPage() {
@@ -74,13 +85,15 @@ export function DebateRoomPage() {
   const [reportDetail, setReportDetail] = useState('');
   const [reporting, setReporting] = useState(false);
   const [isStartingDebate, setIsStartingDebate] = useState(false);
+  const [activeTickers, setActiveTickers] = useState<TickerItem[]>([]);
 
   const previousTurnRef = useRef<string | null>(null);
   const snapshotRef = useRef<DebateSnapshot | null>(null);
   const messageScrollRef = useRef<HTMLDivElement | null>(null);
   const commentScrollRef = useRef<HTMLDivElement | null>(null);
-  const shouldFollowMessageRef = useRef(true);
-  const shouldFollowCommentRef = useRef(true);
+  const lastTickerCommentIdRef = useRef<string | null>(null);
+  const tickerInitializedRef = useRef(false);
+  const tickerTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const mySide = snapshot?.role === 'pro' || snapshot?.role === 'con' ? snapshot.role : null;
   const isDebater = mySide !== null;
@@ -178,19 +191,59 @@ export function DebateRoomPage() {
   }, [snapshot]);
 
   useEffect(() => {
-    if (!shouldFollowMessageRef.current) return;
-    scrollToBottom(messageScrollRef.current);
+    scrollToBottom(messageScrollRef.current, 'smooth');
   }, [snapshot?.messages.length]);
 
   useEffect(() => {
-    if (!shouldFollowCommentRef.current) return;
-    scrollToBottom(commentScrollRef.current);
+    scrollToBottom(commentScrollRef.current, 'smooth');
   }, [snapshot?.comments.length]);
 
   useEffect(() => {
-    shouldFollowMessageRef.current = true;
-    shouldFollowCommentRef.current = true;
+    setActiveTickers([]);
+    lastTickerCommentIdRef.current = null;
+    tickerInitializedRef.current = false;
+
+    const timers = tickerTimersRef.current;
+    Object.values(timers).forEach((timer) => clearTimeout(timer));
+    tickerTimersRef.current = {};
   }, [debateId]);
+
+  useEffect(() => {
+    return () => {
+      const timers = tickerTimersRef.current;
+      Object.values(timers).forEach((timer) => clearTimeout(timer));
+      tickerTimersRef.current = {};
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!snapshot) return;
+
+    const latestComment = snapshot.comments[snapshot.comments.length - 1];
+    if (!latestComment) return;
+
+    if (!tickerInitializedRef.current) {
+      tickerInitializedRef.current = true;
+      lastTickerCommentIdRef.current = latestComment.id;
+      return;
+    }
+
+    if (latestComment.id === lastTickerCommentIdRef.current) return;
+    lastTickerCommentIdRef.current = latestComment.id;
+
+    const tickerId = latestComment.id;
+    const text = `${latestComment.user.displayName}: ${clampText(latestComment.content, 90)}`;
+    const durationMs = tickerDurationMs(text);
+
+    setActiveTickers((prev) => [...prev, { id: tickerId, text, durationMs }].slice(-4));
+
+    const timer = setTimeout(() => {
+      setActiveTickers((prev) => prev.filter((item) => item.id !== tickerId));
+      delete tickerTimersRef.current[tickerId];
+    }, durationMs + 250);
+
+    tickerTimersRef.current[tickerId] = timer;
+  }, [snapshot]);
 
   useEffect(() => {
     refreshSnapshot();
@@ -333,7 +386,6 @@ export function DebateRoomPage() {
     }
 
     setIsSubmittingMessage(true);
-    shouldFollowMessageRef.current = true;
     try {
       await debateApi.sendMessage(debateId, content);
       setMessageInput('');
@@ -396,7 +448,6 @@ export function DebateRoomPage() {
     if (!content) return;
 
     setIsSubmittingComment(true);
-    shouldFollowCommentRef.current = true;
     try {
       await debateApi.sendComment(debateId, content);
       setCommentInput('');
@@ -447,18 +498,6 @@ export function DebateRoomPage() {
       setReporting(false);
     }
   };
-
-  const handleMessageScroll = useCallback(() => {
-    const container = messageScrollRef.current;
-    if (!container) return;
-    shouldFollowMessageRef.current = isNearBottom(container);
-  }, []);
-
-  const handleCommentScroll = useCallback(() => {
-    const container = commentScrollRef.current;
-    if (!container) return;
-    shouldFollowCommentRef.current = isNearBottom(container);
-  }, []);
 
   const voteRatios = useMemo(() => {
     if (!snapshot || snapshot.votes.total === 0) {
@@ -524,7 +563,6 @@ export function DebateRoomPage() {
 
       <div
         ref={commentScrollRef}
-        onScroll={handleCommentScroll}
         className="flex-1 overflow-y-auto overscroll-contain px-3 py-3 space-y-3 min-h-[220px]"
       >
         {snapshot.comments.length === 0 ? (
@@ -653,8 +691,26 @@ export function DebateRoomPage() {
         </div>
       </header>
 
-      <div className="mx-auto grid w-full max-w-7xl gap-4 px-3 pb-44 pt-3 md:px-5 lg:grid-cols-[minmax(0,7fr)_minmax(320px,3fr)] lg:pb-5">
-        <section className="rounded-2xl border border-slate-200 bg-white flex flex-col min-h-[60vh]">
+      {activeTickers.length > 0 && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-36 z-[66] h-14 overflow-hidden px-2 md:bottom-40">
+          {activeTickers.map((item, index) => (
+            <p
+              key={item.id}
+              className="feed-ticker-item absolute left-0 rounded-full bg-black/10 px-3 py-1 text-xs text-slate-700"
+              style={{
+                top: `${6 + index * 10}px`,
+                animationDuration: `${item.durationMs}ms`,
+                ['--ticker-end' as string]: '110vw',
+              }}
+            >
+              {item.text}
+            </p>
+          ))}
+        </div>
+      )}
+
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-3 pb-44 pt-3 md:px-5 lg:pb-5">
+        <section className="rounded-2xl border border-slate-200 bg-white flex min-h-[60vh] flex-col">
           <div className="sticky top-[88px] z-10 border-b border-slate-100 bg-white/90 px-4 py-2 backdrop-blur lg:top-[110px]">
             <div className="flex items-center justify-between text-xs text-slate-500">
               <p>ターン: {snapshot.turn.number} / 担当: {turnOwnerName}</p>
@@ -664,8 +720,7 @@ export function DebateRoomPage() {
 
           <div
             ref={messageScrollRef}
-            onScroll={handleMessageScroll}
-            className="flex-1 overflow-y-auto overscroll-contain px-4 py-4 space-y-4"
+            className="flex-1 min-h-0 overflow-y-auto px-4 py-4 space-y-4 touch-pan-y"
           >
             {snapshot.messages.length === 0 ? (
               <div className="grid h-full min-h-[260px] place-items-center text-sm text-slate-400">
@@ -696,10 +751,6 @@ export function DebateRoomPage() {
             )}
           </div>
         </section>
-
-        <aside className="hidden lg:block">
-          {commentPanel}
-        </aside>
       </div>
 
       <footer className="fixed bottom-0 left-0 right-0 z-50 border-t border-slate-200 bg-white/95 backdrop-blur">
@@ -818,25 +869,35 @@ export function DebateRoomPage() {
                 💬 {snapshot.metrics.commentCount}
               </button>
             </div>
+
+            <div className="hidden items-center justify-end lg:flex">
+              <button
+                type="button"
+                onClick={() => setCommentDrawerOpen(true)}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600"
+              >
+                コメント {snapshot.metrics.commentCount}
+              </button>
+            </div>
           </div>
         </div>
       </footer>
 
       {commentDrawerOpen && (
-        <div className="fixed inset-0 z-[80] lg:hidden">
+        <div className="fixed inset-0 z-[80]">
           <button
             type="button"
             className="absolute inset-0 bg-black/35"
             onClick={() => setCommentDrawerOpen(false)}
           />
-          <div className="absolute bottom-0 left-0 right-0 max-h-[75vh] rounded-t-2xl bg-white p-3 shadow-2xl">
+          <div className="absolute bottom-0 left-0 right-0 max-h-[75vh] rounded-t-2xl bg-white p-3 shadow-2xl lg:bottom-4 lg:left-auto lg:right-4 lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:w-[420px] lg:rounded-2xl">
             <div className="mb-2 flex items-center justify-between">
               <p className="text-sm font-semibold text-slate-700">コメント</p>
               <button type="button" onClick={() => setCommentDrawerOpen(false)} className="text-sm text-slate-500">
                 閉じる
               </button>
             </div>
-            <div className="h-[60vh]">{commentPanel}</div>
+            <div className="h-[60vh] lg:h-[calc(100vh-8rem)]">{commentPanel}</div>
           </div>
         </div>
       )}
