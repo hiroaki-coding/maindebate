@@ -80,7 +80,6 @@ export function DebateRoomPage() {
   const [lastVotedAt, setLastVotedAt] = useState(0);
   const [retryAfterSec, setRetryAfterSec] = useState(0);
   const [reportDialogOpen, setReportDialogOpen] = useState(false);
-  const [reportTarget, setReportTarget] = useState<{ type: 'debate' } | { type: 'comment'; commentId: string }>({ type: 'debate' });
   const [reportReason, setReportReason] = useState<ReportReason>('spam');
   const [reportDetail, setReportDetail] = useState('');
   const [reporting, setReporting] = useState(false);
@@ -463,28 +462,20 @@ export function DebateRoomPage() {
     }
   };
 
-  const openReportDialog = (target: { type: 'debate' } | { type: 'comment'; commentId: string }) => {
-    setReportTarget(target);
+  const openReportDialog = () => {
     setReportReason('spam');
     setReportDetail('');
     setReportDialogOpen(true);
   };
 
   const handleSubmitReport = async () => {
-    if (!debateId) return;
+    if (!debateId || !isDebater) return;
     setReporting(true);
     try {
-      if (reportTarget.type === 'comment') {
-        await debateApi.reportComment(debateId, reportTarget.commentId, {
-          reason: reportReason,
-          detail: reportDetail,
-        });
-      } else {
-        await debateApi.reportDebate(debateId, {
-          reason: reportReason,
-          detail: reportDetail,
-        });
-      }
+      await debateApi.reportDebate(debateId, {
+        reason: reportReason,
+        detail: reportDetail,
+      });
       setReportDialogOpen(false);
       setFlash({ type: 'info', text: '通報を受け付けました' });
       setTimeout(() => setFlash(null), 1500);
@@ -551,6 +542,11 @@ export function DebateRoomPage() {
       : 'ディベート開始後にコメントできます';
   const showStartOverlay = isDebater && (snapshot.status === 'waiting' || snapshot.status === 'matching');
   const mySideLabel = mySide === 'pro' ? '賛成' : mySide === 'con' ? '反対' : '---';
+  const opponentName = mySide === 'pro'
+    ? snapshot.participants.con.displayName
+    : mySide === 'con'
+      ? snapshot.participants.pro.displayName
+      : '相手ユーザー';
 
   const showResultOverlay = snapshot.status === 'finished' && snapshot.result;
 
@@ -577,15 +573,6 @@ export function DebateRoomPage() {
                   <p className="truncate text-xs font-semibold text-slate-700">{comment.user.displayName}</p>
                   <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-600">{comment.content}</p>
                 </div>
-                {snapshot.role !== 'guest' && (
-                  <button
-                    type="button"
-                    onClick={() => openReportDialog({ type: 'comment', commentId: comment.id })}
-                    className="text-[11px] text-slate-400 hover:text-[#D93025]"
-                  >
-                    通報
-                  </button>
-                )}
               </div>
             </div>
           ))
@@ -643,13 +630,15 @@ export function DebateRoomPage() {
               <p className="truncate text-sm font-semibold md:text-base">{snapshot.topic.title}</p>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => openReportDialog({ type: 'debate' })}
-                className="rounded-lg border border-slate-200 px-2 py-1 text-[11px] text-slate-500"
-              >
-                … 通報
-              </button>
+              {isDebater && (
+                <button
+                  type="button"
+                  onClick={openReportDialog}
+                  className="rounded-lg border border-slate-200 px-2 py-1 text-[11px] text-slate-500"
+                >
+                  相手を通報
+                </button>
+              )}
               <p className={`text-sm font-semibold ${snapshot.timers.dangerOverall ? 'text-[#D93025]' : 'text-slate-600'}`}>
                 {formatClock(snapshot.timers.overallRemainingSec)}
               </p>
@@ -910,7 +899,7 @@ export function DebateRoomPage() {
             onClick={() => setReportDialogOpen(false)}
           />
           <div className="absolute left-1/2 top-1/2 w-[92%] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl bg-white p-4 shadow-2xl">
-            <p className="text-sm font-semibold text-slate-800">通報理由を選択してください</p>
+            <p className="text-sm font-semibold text-slate-800">{opponentName} の通報理由を選択してください</p>
 
             <div className="mt-3 space-y-2 text-sm">
               {[

@@ -2264,12 +2264,21 @@ app.post('/:debateId/report', authRequired, async (c) => {
     if (debateError) return c.json({ error: debateError.message }, 500);
     if (!debateRow) return c.json({ error: 'Debate not found' }, 404);
 
-    if (debateRow.pro_user_id === userId || debateRow.con_user_id === userId) {
-      return c.json({ error: '自分自身のコンテンツは通報できません' }, 400);
+    const isPro = debateRow.pro_user_id === userId;
+    const isCon = debateRow.con_user_id === userId;
+
+    if (!isPro && !isCon) {
+      return c.json({ error: '対戦者のみ通報できます' }, 403);
+    }
+
+    const opponentUserId = isPro ? debateRow.con_user_id : debateRow.pro_user_id;
+    if (!opponentUserId) {
+      return c.json({ error: '通報対象ユーザーを特定できません' }, 400);
     }
 
     const reason = parseReportReason(body.reason);
-    const detail = truncateText(normalizeContent(body.detail ?? ''), 140);
+    const detailRaw = truncateText(normalizeContent(body.detail ?? ''), 140);
+    const detailWithTarget = truncateText(`[target_user_id:${opponentUserId}] ${detailRaw}`.trim(), 140);
 
     const { error: reportError } = await supabase
       .from('reports')
@@ -2278,7 +2287,7 @@ app.post('/:debateId/report', authRequired, async (c) => {
         target_type: 'debate',
         target_id: debateId,
         reason,
-        detail: detail.length > 0 ? detail : null,
+        detail: detailWithTarget.length > 0 ? detailWithTarget : null,
         status: 'pending',
       });
 
