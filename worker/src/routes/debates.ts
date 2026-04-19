@@ -643,6 +643,23 @@ async function getDebateContext(
   };
 }
 
+async function fetchDebateState(
+  supabase: ReturnType<typeof getSupabase>,
+  debateId: string
+): Promise<DebateStateRow> {
+  const { data, error } = await supabase
+    .from('debate_state')
+    .select('debate_id, status, current_turn, turn_number, started_at, turn_started_at, voting_started_at, pro_votes, con_votes, updated_at')
+    .eq('debate_id', debateId)
+    .single();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data as DebateStateRow;
+}
+
 async function ensureInProgressStateInitialized(
   supabase: ReturnType<typeof getSupabase>,
   context: DebateContext,
@@ -674,11 +691,17 @@ async function ensureInProgressStateInitialized(
       updated_at: nowIso,
     })
     .eq('debate_id', context.debate.id)
+    .eq('status', 'in_progress')
+    .eq('updated_at', current.updated_at)
     .select('debate_id, status, current_turn, turn_number, started_at, turn_started_at, voting_started_at, pro_votes, con_votes, updated_at')
-    .single();
+    .maybeSingle();
 
   if (error) {
     throw new Error(error.message);
+  }
+
+  if (!data) {
+    return fetchDebateState(supabase, context.debate.id);
   }
 
   return data as DebateStateRow;
@@ -1223,6 +1246,7 @@ async function advanceDebate(
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
   let state = await ensureInProgressStateInitialized(supabase, context, nowIso);
+  const baseUpdatedAt = state.updated_at;
 
   if (state.status === 'waiting' || state.status === 'matching') {
     return { state };
@@ -1281,10 +1305,16 @@ async function advanceDebate(
       updated_at: nowIso,
     })
     .eq('debate_id', context.debate.id)
+    .eq('status', 'in_progress')
+    .eq('updated_at', baseUpdatedAt)
     .select('debate_id, status, current_turn, turn_number, started_at, turn_started_at, voting_started_at, pro_votes, con_votes, updated_at')
-    .single();
+    .maybeSingle();
 
   if (updateError) throw new Error(updateError.message);
+
+  if (!updated) {
+    return { state: await fetchDebateState(supabase, context.debate.id) };
+  }
 
   return { state: updated as DebateStateRow };
 }
