@@ -50,9 +50,9 @@ export function AppNavigation({
 
   return (
     <>
-      <aside className="hidden md:fixed md:inset-y-0 md:left-0 md:z-40 md:flex md:w-[220px] md:flex-col md:border-r md:border-border-color md:bg-white/90 md:backdrop-blur">
-        <div className="h-[60px] flex items-center border-b border-border-color px-4">
-          <p className="text-lg font-bold tracking-[0.14em] text-primary">LIVEDEBATE</p>
+      <aside className="hidden md:fixed md:inset-y-0 md:left-0 md:z-40 md:flex md:w-[220px] md:flex-col md:border-r md:border-[#E0E0E0] md:bg-white">
+        <div className="h-[60px] flex items-center px-4 border-b border-[#E0E0E0]">
+          <p className="text-lg font-semibold">LiveDebate</p>
         </div>
 
         <nav className="flex-1 px-2 py-4 space-y-1">
@@ -64,10 +64,10 @@ export function AppNavigation({
                 {
                   const forceUserActive = item.label === 'User Profile' && (location.pathname.startsWith('/user/') || location.pathname === '/profile');
                   const active = isActive || forceUserActive;
-                  return `flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition-all duration-200 ${
+                  return `flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition ${
                     active
-                      ? 'border border-primary/60 bg-cyan-100/70 text-primary shadow-sm'
-                      : 'border border-transparent text-slate-600 hover:border-border-color hover:bg-white/70'
+                      ? 'border-l-2 border-[var(--color-pro)] bg-[var(--color-pro-bg)] text-[var(--color-pro)]'
+                      : 'text-slate-600 hover:bg-slate-50'
                   }`;
                 }
               }
@@ -78,11 +78,11 @@ export function AppNavigation({
           ))}
         </nav>
 
-        <div className="border-t border-border-color p-4">
+        <div className="border-t border-[#E0E0E0] p-4">
           {user ? (
             <>
               <div className="flex items-center gap-3">
-                <div className="grid h-9 w-9 place-items-center rounded-full bg-cyan-100 text-primary font-semibold shadow-inner">
+                <div className="h-9 w-9 rounded-full bg-[var(--color-pro-bg)] grid place-items-center text-[var(--color-pro)] font-semibold">
                   {user.displayName.slice(0, 1)}
                 </div>
                 <div className="min-w-0">
@@ -104,19 +104,19 @@ export function AppNavigation({
       </aside>
 
       <nav
-        className={`fixed bottom-0 left-0 right-0 z-[90] border-t border-border-color bg-white/95 backdrop-blur transition-opacity md:hidden ${
-          mobileDimmed ? 'opacity-65' : 'opacity-100'
+        className={`fixed bottom-0 left-0 right-0 z-[90] border-t border-[#E0E0E0] bg-white transition-opacity md:hidden ${
+          mobileDimmed ? 'opacity-60 bg-white/95 backdrop-blur-sm' : 'opacity-100'
         }`}
         onPointerDown={() => onMobileNavInteract?.()}
       >
         <div className="relative mx-auto flex h-14 max-w-xl items-center justify-around">
           {mobileSettingsOpen && (
-            <div className="absolute bottom-[58px] right-2 w-56 rounded-2xl border border-border-color bg-white/95 p-2 shadow-xl backdrop-blur">
+            <div className="absolute bottom-[58px] right-2 w-56 rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
               {legalLinks.map((link) => (
                 <button
                   key={link.to}
                   type="button"
-                  className="block w-full rounded-lg px-3 py-2 text-left text-xs text-slate-700 hover:bg-cyan-50"
+                  className="block w-full rounded-lg px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50"
                   onClick={() => {
                     setMobileSettingsOpen(false);
                     navigate(link.to);
@@ -146,7 +146,7 @@ export function AppNavigation({
                       setMobileSettingsOpen(false);
                       navigate(tab.to);
                     }}
-                    className="absolute -top-5 left-1/2 h-12 w-12 -translate-x-1/2 rounded-full bg-gradient-to-br from-primary via-cyan-500 to-blue-500 text-white shadow-lg shadow-cyan-200"
+                    className="absolute -top-5 left-1/2 -translate-x-1/2 h-12 w-12 rounded-full bg-[var(--color-pro)] text-white shadow-lg"
                     aria-label={tab.label}
                   >
                     {tab.icon}
@@ -160,7 +160,7 @@ export function AppNavigation({
                     key={tab.label}
                     type="button"
                     onClick={() => setMobileSettingsOpen((prev) => !prev)}
-                    className={`flex flex-col items-center justify-center text-[11px] ${active ? 'text-primary' : 'text-slate-500'}`}
+                    className={`flex flex-col items-center justify-center text-[11px] ${active ? 'text-[var(--color-pro)]' : 'text-slate-500'}`}
                     aria-expanded={mobileSettingsOpen}
                     aria-label="法的情報メニュー"
                   >
@@ -178,7 +178,7 @@ export function AppNavigation({
                     setMobileSettingsOpen(false);
                     navigate(tab.to);
                   }}
-                  className={`flex flex-col items-center justify-center text-[11px] ${active ? 'text-primary' : 'text-slate-500'}`}
+                  className={`flex flex-col items-center justify-center text-[11px] ${active ? 'text-[var(--color-pro)]' : 'text-slate-500'}`}
                 >
                   <span className="text-sm">{tab.icon}</span>
                   <span>{tab.label}</span>

@@ -143,7 +143,7 @@ export function CompleteProfilePage() {
         {/* ロゴ */}
         <div className="text-center mb-8">
           <Link to="/" className="inline-block">
-            <h1 className="text-3xl font-bold text-text-primary tracking-[0.12em] text-neon">
+            <h1 className="text-3xl font-bold text-text-primary">
               Debate<span className="text-primary">Live</span>
             </h1>
           </Link>
@@ -151,7 +151,7 @@ export function CompleteProfilePage() {
         </div>
 
         {/* カード */}
-        <div className="bg-white rounded-2xl border border-border-color shadow-card p-8 animate-cyber-enter">
+        <div className="bg-white rounded-xl shadow-card p-8">
           <h2 className="text-xl font-semibold text-text-primary text-center mb-2">
             プロフィール設定
           </h2>

@@ -24,7 +24,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             ref={ref}
             type={isPassword && showPassword ? 'text' : type}
             className={`
-              w-full px-4 py-3 border rounded-xl bg-white/85
+              w-full px-4 py-3 border rounded-lg
               focus:outline-none focus:ring-1 transition-colors duration-200
               placeholder:text-text-tertiary
               ${error

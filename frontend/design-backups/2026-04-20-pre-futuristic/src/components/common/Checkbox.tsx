@@ -16,8 +16,8 @@ export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(
               ref={ref}
               type="checkbox"
               className={`
-                peer w-5 h-5 rounded border-2 cursor-pointer
-                appearance-none bg-white/85 transition-all duration-200
+                w-5 h-5 rounded border-2 cursor-pointer
+                appearance-none bg-white transition-colors duration-200
                 checked:bg-primary checked:border-primary
                 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2
                 ${error ? 'border-error' : 'border-border-color'}

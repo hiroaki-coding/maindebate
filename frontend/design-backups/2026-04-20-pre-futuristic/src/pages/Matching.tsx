@@ -325,9 +325,9 @@ export function MatchingPage() {
         : 'クイックマッチまたはランクマッチを選ぶと、マッチングが始まります。';
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-gradient-to-b from-bg-primary via-bg-primary to-bg-secondary">
-      <div className="pointer-events-none absolute -left-40 -top-40 h-96 w-96 rounded-full bg-cyan-200/55 blur-3xl" />
-      <div className="pointer-events-none absolute -right-32 bottom-8 h-80 w-80 rounded-full bg-blue-200/55 blur-3xl" />
+    <div className="relative min-h-screen overflow-hidden bg-gradient-to-b from-white via-white to-slate-100">
+      <div className="pointer-events-none absolute -left-40 -top-40 h-96 w-96 rounded-full bg-red-100/60 blur-3xl" />
+      <div className="pointer-events-none absolute -right-32 bottom-8 h-80 w-80 rounded-full bg-slate-200/60 blur-3xl" />
 
       <div className="relative mx-auto flex min-h-screen w-full max-w-5xl flex-col items-center justify-between px-5 py-8 md:py-10">
         <div className="w-full text-center">
@@ -337,7 +337,7 @@ export function MatchingPage() {
         </div>
 
         <main className="w-full max-w-3xl">
-          <div className="rounded-3xl border border-border-color bg-white/85 p-5 shadow-xl backdrop-blur animate-cyber-enter md:p-8">
+          <div className="rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-xl backdrop-blur md:p-8">
             <div className="flex items-center justify-center gap-4 md:gap-8">
               <div className="flex flex-col items-center gap-2">
                 <UserAvatar name={displayName} avatarUrl={selfAvatar} />
@@ -368,7 +368,7 @@ export function MatchingPage() {
             </div>
 
             <div className="mt-6 text-center md:mt-8">
-              <p className="text-2xl font-bold tracking-[0.1em] text-primary text-neon md:text-3xl">
+              <p className="text-2xl font-bold tracking-wide text-red-500 md:text-3xl">
                 {statusTitle}
               </p>
               <p className="mt-2 text-sm text-text-secondary">
@@ -378,8 +378,8 @@ export function MatchingPage() {
               <p className="mt-1 text-sm text-slate-400">例) {topicExample}</p>
             </div>
 
-            <div className="mt-7 rounded-2xl border border-border-color bg-cyan-50/70 px-4 py-3 text-center">
-              <p className="text-sm font-medium text-primary">💡 ヒント: {tip}</p>
+            <div className="mt-7 rounded-2xl border border-red-100 bg-red-50/70 px-4 py-3 text-center">
+              <p className="text-sm font-medium text-red-600">💡 ヒント: {tip}</p>
             </div>
 
             {error && (
@@ -393,11 +393,11 @@ export function MatchingPage() {
                 type="button"
                 onClick={() => startMatching('quick')}
                 disabled={viewState !== 'idle'}
-                className="group flex-1 rounded-xl bg-gradient-to-r from-primary via-cyan-500 to-blue-500 px-6 py-4 text-white shadow-lg shadow-cyan-200 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
+                className="group flex-1 rounded-xl bg-red-500 px-6 py-4 text-white shadow-lg shadow-red-200 transition hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <div className="text-left md:text-center">
                   <p className="text-lg font-bold">クイックマッチ</p>
-                  <p className="text-xs text-cyan-50">すぐ対戦</p>
+                  <p className="text-xs text-red-100">すぐ対戦</p>
                 </div>
               </button>
 
@@ -405,11 +405,11 @@ export function MatchingPage() {
                 type="button"
                 onClick={() => startMatching('ranked')}
                 disabled={viewState !== 'idle'}
-                className="flex-1 rounded-xl border border-border-color bg-white px-6 py-4 text-primary transition hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex-1 rounded-xl border border-red-300 bg-white px-6 py-4 text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <div className="text-left md:text-center">
                   <p className="text-lg font-bold">ランクマッチ</p>
-                  <p className="text-xs text-primary/70">近い実力の相手とマッチ</p>
+                  <p className="text-xs text-red-400">近い実力の相手とマッチ</p>
                 </div>
               </button>
             </div>

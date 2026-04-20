@@ -826,7 +826,7 @@ export function SlideFeedPage() {
       <article
         key={card.debateId}
         aria-label={`${card.topicTitle} ライブ中`}
-        className="absolute inset-0 overflow-hidden rounded-[var(--border-radius-card)] border border-border-color bg-white shadow-xl"
+        className="absolute inset-0 overflow-hidden rounded-[var(--border-radius-card)] border border-[#E0E0E0] bg-white shadow-xl"
         style={{
           transform,
           transition,
@@ -1006,7 +1006,7 @@ export function SlideFeedPage() {
 
   if (mobileLandscape) {
     return (
-      <div className="min-h-screen grid place-items-center bg-transparent px-6 text-center text-slate-700">
+      <div className="min-h-screen grid place-items-center bg-white px-6 text-center text-slate-700">
         <div>
           <p className="text-4xl" aria-hidden="true">📱</p>
           <p className="mt-3 text-base font-medium">縦向きでご利用ください</p>
@@ -1016,14 +1016,14 @@ export function SlideFeedPage() {
   }
 
   return (
-    <div className="min-h-screen bg-transparent text-slate-800" style={{ minHeight: '100svh' }}>
+    <div className="min-h-screen bg-white text-slate-800" style={{ minHeight: '100svh' }}>
       {toast && (
         <div className="fixed left-1/2 top-4 z-[120] -translate-x-1/2">
           <div
             className={`rounded-full px-4 py-2 text-sm shadow-lg ${
               toast.type === 'error'
                 ? 'border border-red-200 bg-red-50 text-[var(--color-pro)]'
-                : 'border border-border-color bg-white text-slate-700'
+                : 'border border-slate-200 bg-white text-slate-700'
             }`}
           >
             {toast.message}
@@ -1087,7 +1087,7 @@ export function SlideFeedPage() {
                   type="button"
                   onClick={movePrev}
                   aria-label="前のディベート"
-                  className="grid h-11 w-11 place-items-center rounded-full border border-border-color bg-white text-lg text-slate-600 transition hover:bg-slate-50 disabled:opacity-40"
+                  className="grid h-11 w-11 place-items-center rounded-full border border-slate-200 bg-white text-lg text-slate-600 transition hover:bg-slate-50 disabled:opacity-40"
                   disabled={currentIndex <= 0}
                 >
                   ▲
@@ -1096,7 +1096,7 @@ export function SlideFeedPage() {
                   type="button"
                   onClick={moveNext}
                   aria-label="次のディベート"
-                  className="grid h-11 w-11 place-items-center rounded-full border border-border-color bg-white text-lg text-slate-600 transition hover:bg-slate-50 disabled:opacity-40"
+                  className="grid h-11 w-11 place-items-center rounded-full border border-slate-200 bg-white text-lg text-slate-600 transition hover:bg-slate-50 disabled:opacity-40"
                   disabled={currentIndex >= liveCards.length - 1}
                 >
                   ▼
@@ -1173,7 +1173,7 @@ export function SlideFeedPage() {
             className="absolute inset-0 bg-black/30"
             onClick={() => setCommentDrawerOpen(false)}
           />
-          <div className="absolute bottom-0 left-0 right-0 rounded-t-2xl border border-border-color bg-white p-3 shadow-2xl md:left-1/2 md:max-w-[520px] md:-translate-x-1/2">
+          <div className="absolute bottom-0 left-0 right-0 rounded-t-2xl bg-white p-3 shadow-2xl md:left-1/2 md:max-w-[520px] md:-translate-x-1/2">
             <div className="mb-2 flex items-center justify-between">
               <p className="text-sm font-semibold text-slate-800">コメント</p>
               <button
@@ -1185,7 +1185,7 @@ export function SlideFeedPage() {
               </button>
             </div>
 
-            <div className="mb-3 max-h-40 overflow-y-auto rounded-lg border border-border-color p-2">
+            <div className="mb-3 max-h-40 overflow-y-auto rounded-lg border border-slate-200 p-2">
               {currentDetail.comments.length === 0 ? (
                 <p className="px-1 py-2 text-xs text-slate-400">まだコメントがありません</p>
               ) : (
@@ -1203,13 +1203,13 @@ export function SlideFeedPage() {
                 onChange={(event) => setCommentInput(event.target.value)}
                 maxLength={140}
                 placeholder="コメントを送信..."
-                className="h-10 flex-1 rounded-lg border border-border-color px-3 text-sm outline-none focus:border-primary"
+                className="h-10 flex-1 rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-[var(--color-pro)]"
               />
               <button
                 type="button"
                 onClick={handleSendComment}
                 disabled={isSendingComment || normalizeContent(commentInput).length === 0}
-                className="h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition hover:bg-primary-hover disabled:opacity-60"
+                className="h-10 rounded-lg bg-[var(--color-pro)] px-4 text-sm font-semibold text-white transition hover:bg-[var(--color-pro-hover)] disabled:opacity-60"
               >
                 送信
               </button>

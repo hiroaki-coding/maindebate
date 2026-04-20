@@ -108,14 +108,14 @@ export function VerifyEmailPage() {
         {/* ロゴ */}
         <div className="text-center mb-8">
           <Link to="/" className="inline-block">
-            <h1 className="text-3xl font-bold text-text-primary tracking-[0.12em] text-neon">
+            <h1 className="text-3xl font-bold text-text-primary">
               Debate<span className="text-primary">Live</span>
             </h1>
           </Link>
         </div>
 
         {/* カード */}
-        <div className="bg-white rounded-2xl border border-border-color shadow-card p-8 text-center animate-cyber-enter">
+        <div className="bg-white rounded-xl shadow-card p-8 text-center">
           {/* アイコン */}
           <div className="w-16 h-16 bg-primary-light rounded-full flex items-center justify-center mx-auto mb-6">
             <svg

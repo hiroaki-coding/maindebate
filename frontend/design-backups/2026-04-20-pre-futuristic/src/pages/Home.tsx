@@ -417,7 +417,7 @@ export function HomePage() {
   };
 
   return (
-    <div className="min-h-screen bg-transparent text-slate-800" style={{ paddingBottom: '56px' }}>
+    <div className="min-h-screen bg-white text-slate-800" style={{ paddingBottom: '56px' }}>
       {disconnected && (
         <div className="sticky top-0 z-[60] bg-red-50 px-4 py-2 text-sm text-[var(--color-pro)]">
           🔴 接続が切れました。再接続中...
@@ -427,9 +427,9 @@ export function HomePage() {
       <AppNavigation user={user} />
 
       <div className="md:pl-[220px]">
-        <header className="sticky top-0 z-30 h-[60px] border-b border-border-color bg-white/90 backdrop-blur">
+        <header className="sticky top-0 z-30 h-[60px] border-b border-[#E0E0E0] bg-white">
           <div className="mx-auto flex h-full max-w-[1400px] items-center justify-between gap-3 px-3 md:px-6">
-            <p className={`text-lg font-bold tracking-[0.12em] text-neon transition ${searchOpenMobile ? 'opacity-0 md:opacity-100' : 'opacity-100'}`}>LIVEDEBATE</p>
+            <p className={`text-lg font-semibold transition ${searchOpenMobile ? 'opacity-0 md:opacity-100' : 'opacity-100'}`}>LiveDebate</p>
 
             <div className="hidden md:flex md:flex-1 md:justify-center">
               <div className="relative w-full max-w-[480px]">
@@ -441,7 +441,7 @@ export function HomePage() {
                 />
 
                 {(searching || suggestions.length > 0) && (
-                  <div className="absolute left-0 right-0 top-11 rounded-xl border border-border-color bg-white shadow-lg">
+                  <div className="absolute left-0 right-0 top-11 rounded-xl border border-slate-200 bg-white shadow-lg">
                     {searching && <p className="px-3 py-2 text-xs text-slate-400">検索中...</p>}
                     {!searching && suggestions.length === 0 && <p className="px-3 py-2 text-xs text-slate-400">候補がありません</p>}
                     {suggestions.map((item) => (
@@ -468,7 +468,7 @@ export function HomePage() {
                 <button
                   type="button"
                   onClick={() => setLegalMenuOpen((prev) => !prev)}
-                  className="h-9 w-9 rounded-full border border-border-color bg-white/70 text-sm"
+                  className="h-9 w-9 rounded-full border border-slate-200 text-sm"
                   aria-label="法的情報メニュー"
                   aria-expanded={legalMenuOpen}
                 >
@@ -476,7 +476,7 @@ export function HomePage() {
                 </button>
 
                 {legalMenuOpen && (
-                  <div className="absolute right-0 top-11 w-56 rounded-xl border border-border-color bg-white p-2 shadow-xl">
+                  <div className="absolute right-0 top-11 w-56 rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
                     {legalLinks.map((link) => (
                       <Link
                         key={link.to}
@@ -498,7 +498,7 @@ export function HomePage() {
                     setLegalMenuOpen(false);
                     navigate(`/user/${user.id}`);
                   }}
-                  className="hidden md:grid h-9 w-9 place-items-center rounded-full bg-cyan-100 text-primary font-semibold"
+                  className="hidden md:grid h-9 w-9 place-items-center rounded-full bg-[var(--color-pro-bg)] text-[var(--color-pro)] font-semibold"
                 >
                   {user.displayName.slice(0, 1)}
                 </button>
@@ -513,7 +513,7 @@ export function HomePage() {
                     setLegalMenuOpen(false);
                     logout();
                   }}
-                  className="hidden rounded-lg border border-border-color px-3 py-1.5 text-xs text-slate-600 lg:inline"
+                  className="hidden rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 lg:inline"
                 >
                   ログアウト
                 </button>
@@ -521,7 +521,7 @@ export function HomePage() {
 
               <button
                 type="button"
-                className="md:hidden h-9 w-9 rounded-full border border-border-color bg-white/70 text-sm"
+                className="md:hidden h-9 w-9 rounded-full border border-slate-200 text-sm"
                 onClick={() => setSearchOpenMobile((prev) => !prev)}
               >
                 🔎
@@ -530,7 +530,7 @@ export function HomePage() {
           </div>
 
           {searchOpenMobile && (
-            <div className="border-t border-border-color bg-white/90 px-3 py-2 md:hidden animate-[fadeIn_0.15s_ease-out] backdrop-blur">
+            <div className="border-t border-slate-100 bg-white px-3 py-2 md:hidden animate-[fadeIn_0.15s_ease-out]">
               <input
                 autoFocus
                 value={searchQuery}
@@ -565,7 +565,7 @@ export function HomePage() {
 
         <main className="mx-auto max-w-[1400px] px-3 py-5 md:px-6">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-[18px] font-semibold tracking-[0.1em] text-neon">LIVE NOW</h2>
+            <h2 className="text-[18px] font-semibold">🔴 LIVE NOW</h2>
             <Link to="/feed" className="text-xs text-slate-500 hover:text-slate-700">すべて表示</Link>
           </div>
 

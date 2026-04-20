@@ -252,12 +252,12 @@ export function AdminDashboardPage() {
 
   if (phase === 'login') {
     return (
-      <div className="min-h-screen bg-bg-secondary px-4 py-10">
-        <div className="mx-auto max-w-2xl rounded-2xl border border-border-color bg-white/95 p-8 shadow-xl animate-cyber-enter">
+      <div className="min-h-screen bg-[radial-gradient(circle_at_15%_10%,#fce7f3_0%,#f5f4f0_45%,#ece9e1_100%)] px-4 py-10">
+        <div className="mx-auto max-w-2xl rounded-2xl border border-slate-300 bg-white/95 p-8 shadow-xl">
           <p className="text-xs tracking-[0.22em] text-slate-500">CONFIDENTIAL OPS CONSOLE</p>
           <h1 className="mt-2 text-2xl font-bold text-slate-900">管理者セキュアログイン</h1>
 
-          <div className="mt-5 rounded-xl border border-amber-300 bg-amber-50/90 p-4 text-sm text-amber-900">
+          <div className="mt-5 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
             法的警告: このシステムは許可された管理者のみ利用可能です。不正アクセス・不正操作は監査ログに記録され、法的措置の対象となります。
           </div>
 
@@ -303,7 +303,7 @@ export function AdminDashboardPage() {
             <button
               type="submit"
               disabled={submitting}
-              className="w-full rounded-lg bg-gradient-to-r from-primary via-cyan-500 to-blue-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              className="w-full rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
             >
               {submitting ? '認証中...' : 'セキュアログイン'}
             </button>
@@ -314,8 +314,8 @@ export function AdminDashboardPage() {
   }
 
   return (
-    <div className="min-h-screen bg-transparent px-4 py-6">
-      <div className="mx-auto max-w-7xl rounded-2xl border border-border-color bg-white p-5 shadow-xl animate-cyber-enter">
+    <div className="min-h-screen bg-[#f2efe8] px-4 py-6">
+      <div className="mx-auto max-w-7xl rounded-2xl border border-slate-300 bg-white p-5 shadow-xl">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
           <div>
             <p className="text-xs tracking-[0.2em] text-slate-500">ADMIN INTERNAL</p>
@@ -350,7 +350,7 @@ export function AdminDashboardPage() {
               key={key}
               type="button"
               onClick={() => setTab(key as TabKey)}
-              className={`rounded-lg px-3 py-2 text-sm ${tab === key ? 'bg-primary text-white shadow-md shadow-cyan-200' : 'border border-border-color text-slate-700'}`}
+              className={`rounded-lg px-3 py-2 text-sm ${tab === key ? 'bg-slate-900 text-white' : 'border border-slate-300 text-slate-700'}`}
             >
               {label}
             </button>

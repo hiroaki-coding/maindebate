@@ -522,7 +522,7 @@ export function DebateRoomPage() {
   if (error || !snapshot) {
     return (
       <div className="min-h-screen bg-bg-secondary flex items-center justify-center px-4">
-        <div className="max-w-md w-full rounded-2xl border border-border-color bg-white p-6 shadow-card text-center">
+        <div className="max-w-md w-full rounded-xl bg-white p-6 shadow-card text-center">
           <p className="text-error mb-4">{error ?? 'ディベートを読み込めませんでした'}</p>
           <Button onClick={() => navigate('/matching')}>マッチングへ戻る</Button>
         </div>
@@ -551,7 +551,7 @@ export function DebateRoomPage() {
   const showResultOverlay = snapshot.status === 'finished' && snapshot.result;
 
   const commentPanel = (
-    <div className="flex h-full flex-col rounded-2xl border border-border-color bg-white">
+    <div className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white">
       <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
         <p className="text-sm font-semibold text-slate-700">ライブコメント</p>
         <p className="text-xs text-slate-500">{snapshot.metrics.commentCount}件</p>
@@ -586,7 +586,7 @@ export function DebateRoomPage() {
             value={commentInput}
             onChange={(e) => setCommentInput(e.target.value)}
             placeholder={commentPlaceholder}
-            className="flex-1 rounded-lg border border-border-color px-3 py-2 text-sm outline-none focus:border-primary"
+            className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-[#D93025]"
             disabled={isCommentDisabled}
             maxLength={200}
           />
@@ -603,12 +603,12 @@ export function DebateRoomPage() {
   );
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-bg-primary via-bg-primary to-bg-secondary text-slate-800">
+    <div className="min-h-screen bg-gradient-to-b from-white via-white to-slate-100 text-slate-800">
       {flash && (
         <div className="fixed left-1/2 top-3 z-[70] -translate-x-1/2">
           <div
             className={`rounded-xl px-4 py-2 text-sm font-medium shadow-lg ${
-              flash.type === 'error' ? 'bg-red-50 text-[#D93025] border border-red-200' : 'bg-white text-slate-700 border border-border-color'
+              flash.type === 'error' ? 'bg-red-50 text-[#D93025] border border-red-200' : 'bg-white text-slate-700 border border-slate-200'
             }`}
           >
             {flash.text}
@@ -622,7 +622,7 @@ export function DebateRoomPage() {
         </div>
       )}
 
-      <header className="sticky top-0 z-40 border-b border-border-color bg-white/95 backdrop-blur">
+      <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-7xl px-3 py-2 md:px-5 md:py-3">
           <div className="flex items-center justify-between gap-3">
             <Link to="/matching" className="text-xs text-slate-500 hover:text-slate-700">← マッチング</Link>
@@ -634,7 +634,7 @@ export function DebateRoomPage() {
                 <button
                   type="button"
                   onClick={openReportDialog}
-                  className="rounded-lg border border-border-color px-2 py-1 text-[11px] text-slate-500"
+                  className="rounded-lg border border-slate-200 px-2 py-1 text-[11px] text-slate-500"
                 >
                   相手を通報
                 </button>
@@ -699,7 +699,7 @@ export function DebateRoomPage() {
       )}
 
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-3 pb-44 pt-3 md:px-5 lg:pb-5">
-        <section className="rounded-2xl border border-border-color bg-white flex min-h-[60vh] flex-col">
+        <section className="rounded-2xl border border-slate-200 bg-white flex min-h-[60vh] flex-col">
           <div className="sticky top-[88px] z-10 border-b border-slate-100 bg-white/90 px-4 py-2 backdrop-blur lg:top-[110px]">
             <div className="flex items-center justify-between text-xs text-slate-500">
               <p>ターン: {snapshot.turn.number} / 担当: {turnOwnerName}</p>
@@ -742,7 +742,7 @@ export function DebateRoomPage() {
         </section>
       </div>
 
-      <footer className="fixed bottom-0 left-0 right-0 z-50 border-t border-border-color bg-white/95 backdrop-blur">
+      <footer className="fixed bottom-0 left-0 right-0 z-50 border-t border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-7xl px-3 py-3 md:px-5">
           <div className="space-y-3">
             {isDebater && (

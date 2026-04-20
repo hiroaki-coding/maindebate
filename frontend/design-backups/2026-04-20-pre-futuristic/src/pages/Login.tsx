@@ -64,15 +64,15 @@ export function LoginPage() {
         {/* ロゴ */}
         <div className="text-center mb-8">
           <Link to="/" className="inline-block">
-            <h1 className="text-3xl font-bold text-text-primary tracking-[0.12em] text-neon">
+            <h1 className="text-3xl font-bold text-text-primary">
               Debate<span className="text-primary">Live</span>
             </h1>
           </Link>
-          <p className="mt-2 text-text-secondary tracking-wider">議論版の格闘技観戦</p>
+          <p className="mt-2 text-text-secondary">議論版の格闘技観戦</p>
         </div>
 
         {/* カード */}
-        <div className="bg-white rounded-2xl border border-border-color shadow-card p-8 animate-cyber-enter">
+        <div className="bg-white rounded-xl shadow-card p-8">
           <h2 className="text-xl font-semibold text-text-primary text-center mb-6">
             ログイン
           </h2>
@@ -102,7 +102,7 @@ export function LoginPage() {
               <div className="w-full border-t border-border-color" />
             </div>
             <div className="relative flex justify-center text-sm">
-              <span className="px-4 bg-white/80 text-text-secondary">または</span>
+              <span className="px-4 bg-white text-text-secondary">または</span>
             </div>
           </div>
 
@@ -149,7 +149,7 @@ export function LoginPage() {
         </div>
 
         {/* 登録リンク */}
-        <p className="mt-6 text-center text-text-secondary tracking-wide">
+        <p className="mt-6 text-center text-text-secondary">
           アカウントをお持ちでない方は{' '}
           <Link to="/register" className="text-primary hover:text-primary-hover font-medium">
             新規登録

@@ -83,10 +83,9 @@ function PublicOnlyRoute({ children }: { children: React.ReactNode }) {
 // 利用規約ページ（仮）
 function TermsPage() {
   return (
-    <div className="min-h-screen bg-bg-secondary px-4 py-12">
-      <div className="mx-auto max-w-3xl rounded-2xl border border-border-color bg-white p-8 shadow-card backdrop-blur animate-cyber-enter">
-        <p className="text-xs tracking-[0.22em] text-text-secondary">CYBER LEGAL NODE</p>
-        <h1 className="mb-6 mt-2 text-2xl font-bold text-text-primary text-neon">利用規約</h1>
+    <div className="min-h-screen bg-bg-secondary py-12 px-4">
+      <div className="max-w-3xl mx-auto bg-white rounded-xl shadow-card p-8">
+        <h1 className="text-2xl font-bold text-text-primary mb-6">利用規約</h1>
         <div className="prose text-text-secondary">
           <p>DebateLive利用規約（サンプル）</p>
           <h2 className="text-lg font-semibold text-text-primary mt-6 mb-2">第1条（目的）</h2>
@@ -109,10 +108,9 @@ function TermsPage() {
 // プライバシーポリシーページ（仮）
 function PrivacyPage() {
   return (
-    <div className="min-h-screen bg-bg-secondary px-4 py-12">
-      <div className="mx-auto max-w-3xl rounded-2xl border border-border-color bg-white p-8 shadow-card backdrop-blur animate-cyber-enter">
-        <p className="text-xs tracking-[0.22em] text-text-secondary">SECURITY PROTOCOL</p>
-        <h1 className="mb-6 mt-2 text-2xl font-bold text-text-primary text-neon">プライバシーポリシー</h1>
+    <div className="min-h-screen bg-bg-secondary py-12 px-4">
+      <div className="max-w-3xl mx-auto bg-white rounded-xl shadow-card p-8">
+        <h1 className="text-2xl font-bold text-text-primary mb-6">プライバシーポリシー</h1>
         <div className="prose text-text-secondary">
           <p>DebateLiveプライバシーポリシー（サンプル）</p>
           <h2 className="text-lg font-semibold text-text-primary mt-6 mb-2">収集する情報</h2>
@@ -136,10 +134,9 @@ function PrivacyPage() {
 // Cookie・デバイス情報の利用説明ページ（仮）
 function CookiePolicyPage() {
   return (
-    <div className="min-h-screen bg-bg-secondary px-4 py-12">
-      <div className="mx-auto max-w-3xl rounded-2xl border border-border-color bg-white p-8 shadow-card backdrop-blur animate-cyber-enter">
-        <p className="text-xs tracking-[0.22em] text-text-secondary">TRACKING DISCLOSURE</p>
-        <h1 className="mb-6 mt-2 text-2xl font-bold text-text-primary text-neon">Cookie・デバイス情報の利用説明</h1>
+    <div className="min-h-screen bg-bg-secondary py-12 px-4">
+      <div className="max-w-3xl mx-auto bg-white rounded-xl shadow-card p-8">
+        <h1 className="text-2xl font-bold text-text-primary mb-6">Cookie・デバイス情報の利用説明</h1>
         <div className="prose text-text-secondary">
           <p>DebateLive Cookieポリシー（サンプル）</p>
           <h2 className="text-lg font-semibold text-text-primary mt-6 mb-2">利用目的</h2>
@@ -186,22 +183,22 @@ function CookieConsentBanner() {
 
   return (
     <div className="fixed inset-x-0 bottom-16 z-[140] px-3 md:bottom-4">
-      <div className="mx-auto max-w-4xl rounded-2xl border border-border-color bg-white/95 p-4 shadow-xl backdrop-blur">
-        <p className="text-sm text-text-secondary">
+      <div className="mx-auto max-w-4xl rounded-xl border border-slate-300 bg-white/95 p-4 shadow-xl backdrop-blur">
+        <p className="text-sm text-slate-700">
           当サイトでは、サービス改善とセキュリティ強化のためCookieおよびデバイス情報を利用します。
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => saveConsent('all')}
-            className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-white shadow-lg shadow-cyan-200"
+            className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
           >
             同意する
           </button>
           <button
             type="button"
             onClick={() => saveConsent('essential')}
-            className="rounded-lg border border-border-color px-3 py-2 text-xs text-text-secondary"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-700"
           >
             必須のみ許可
           </button>
@@ -263,8 +260,7 @@ function App() {
 
   return (
     <BrowserRouter>
-      <div className="app-theme relative">
-        <Routes>
+      <Routes>
         {/* 公開ページ */}
         <Route path="/legal/terms" element={<TermsPage />} />
         <Route path="/legal/privacy" element={<PrivacyPage />} />
@@ -354,10 +350,9 @@ function App() {
 
         {/* 404 */}
         <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+      </Routes>
 
-        <CookieConsentBanner />
-      </div>
+      <CookieConsentBanner />
     </BrowserRouter>
   );
 }

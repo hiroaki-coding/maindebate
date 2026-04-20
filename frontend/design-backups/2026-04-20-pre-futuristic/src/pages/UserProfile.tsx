@@ -224,7 +224,7 @@ export function UserProfilePage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-transparent grid place-items-center">
+      <div className="min-h-screen bg-white grid place-items-center">
         <div className="h-10 w-10 animate-spin rounded-full border-4 border-[var(--color-pro)] border-t-transparent" />
       </div>
     );
@@ -232,7 +232,7 @@ export function UserProfilePage() {
 
   if (error || !profile) {
     return (
-      <div className="min-h-screen bg-transparent px-4 py-8">
+      <div className="min-h-screen bg-white px-4 py-8">
         <div className="mx-auto max-w-xl rounded-xl border border-red-200 bg-red-50 p-6 text-center text-[var(--color-pro)]">
           {error ?? 'プロフィールの表示に失敗しました'}
         </div>
@@ -243,9 +243,9 @@ export function UserProfilePage() {
   const rankIndex = rankDefs.findIndex((entry) => entry.rank === profile.rank);
 
   return (
-    <div className="min-h-screen bg-transparent text-slate-800" style={{ paddingBottom: '56px' }}>
+    <div className="min-h-screen bg-white text-slate-800" style={{ paddingBottom: '56px' }}>
       {toast && (
-        <div className="fixed left-1/2 top-4 z-[100] -translate-x-1/2 rounded-full border border-border-color bg-white px-4 py-2 text-sm shadow">
+        <div className="fixed left-1/2 top-4 z-[100] -translate-x-1/2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm shadow">
           {toast}
         </div>
       )}
@@ -285,23 +285,23 @@ export function UserProfilePage() {
 
         <main className="mx-auto max-w-[1400px] px-4 py-5 md:px-6">
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
-            <section className="space-y-4 animate-cyber-enter">
+            <section className="space-y-4">
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-xl border border-border-color bg-white p-4">
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
                   <p className="text-xs text-slate-500">総ディベート数</p>
                   <p className="mt-2 text-2xl font-semibold">{profile.stats.totalDebates}</p>
                   <p className="text-xs text-slate-400">試合</p>
                 </div>
-                <div className="rounded-xl border border-border-color bg-white p-4">
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
                   <p className="text-xs text-slate-500">勝率</p>
                   <p className="mt-2 text-2xl font-semibold">{percent(profile.stats.winRate)}</p>
                   <p className="text-xs text-slate-400">勝率</p>
                 </div>
-                <div className="rounded-xl border border-border-color bg-white p-4">
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
                   <p className="text-xs text-slate-500">戦績</p>
                   <p className="mt-2 text-xl font-semibold">W {profile.stats.wins} / L {profile.stats.losses} / D {profile.stats.draws}</p>
                 </div>
-                <div className="rounded-xl border border-border-color bg-white p-4">
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
                   <p className="text-xs text-slate-500">次ランクまで</p>
                   <p className="mt-2 text-xl font-semibold">
                     {profile.progress.isMaxRank ? '最高ランク達成 🎉' : `${profile.progress.remainingToNext}pt`}
@@ -315,7 +315,7 @@ export function UserProfilePage() {
                 </div>
               </div>
 
-              <div className="rounded-xl border border-border-color bg-white p-4">
+              <div className="rounded-xl border border-slate-200 bg-white p-4">
                 <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
                   <span>現在 {compactNumber(profile.progress.currentPoints)}pt</span>
                   <span>
@@ -335,7 +335,7 @@ export function UserProfilePage() {
                 </div>
               </div>
 
-              <div className="rounded-xl border border-border-color bg-white p-4">
+              <div className="rounded-xl border border-slate-200 bg-white p-4">
                 <p className="mb-3 text-sm font-semibold">ランク階段</p>
                 <div className="flex gap-3 overflow-x-auto pb-2">
                   {rankDefs.map((rank, index) => {
