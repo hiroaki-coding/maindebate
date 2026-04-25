@@ -195,6 +195,12 @@ export interface DebateSnapshot {
     dangerOverall: boolean;
     dangerTurn: boolean;
   };
+  timing: {
+    serverNow: string;
+    startedAt: string | null;
+    turnStartedAt: string | null;
+    votingStartedAt: string | null;
+  };
   turn: {
     current: 'pro' | 'con' | null;
     number: number;
@@ -271,22 +277,6 @@ export interface DebateSnapshot {
   };
 }
 
-export interface DebateTick {
-  status: DebateSnapshot['status'];
-  currentTurn: 'pro' | 'con' | null;
-  turnNumber: number;
-  timers: {
-    overallRemainingSec: number;
-    turnRemainingSec: number;
-  };
-  votes: {
-    pro: number;
-    con: number;
-    total: number;
-  };
-  result?: DebateSnapshot['result'];
-}
-
 export const debateApi = {
   getSnapshot: (debateId: string) =>
     request<DebateSnapshot>(`/api/debates/${debateId}/snapshot`, { optionalAuth: true }),
@@ -304,13 +294,15 @@ export const debateApi = {
       requireAuth: true,
     }),
 
-  tick: (debateId: string) =>
-    request<DebateTick>(`/api/debates/${debateId}/tick`, { optionalAuth: true }),
-
-  heartbeat: (debateId: string) =>
-    request<{ ok: boolean }>(`/api/debates/${debateId}/heartbeat`, {
+  progress: (debateId: string) =>
+    request<{
+      status: DebateSnapshot['status'];
+      currentTurn: 'pro' | 'con' | null;
+      turnNumber: number;
+      result?: DebateSnapshot['result'];
+    }>(`/api/debates/${debateId}/progress`, {
       method: 'POST',
-      requireAuth: true,
+      optionalAuth: true,
     }),
 
   sendMessage: (debateId: string, content: string) =>

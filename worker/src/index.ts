@@ -5,7 +5,7 @@ import { errorHandler } from './middleware/error';
 import { securityMiddleware } from './middleware/security';
 import { authRoutes } from './routes/auth';
 import { matchingRoutes } from './routes/matching';
-import { debateRoutes } from './routes/debates';
+import { debateRoutes, runDebateProgressSweep } from './routes/debates';
 import { homeRoutes } from './routes/home';
 import { adminRoutes } from './routes/admin';
 import { userRoutes } from './routes/users';
@@ -72,8 +72,7 @@ app.notFound((c) => {
       'GET /api/matching/status',
       'POST /api/matching/cancel',
       'GET /api/debates/:debateId/snapshot',
-      'GET /api/debates/:debateId/tick',
-      'POST /api/debates/:debateId/heartbeat',
+      'POST /api/debates/:debateId/progress',
       'POST /api/debates/:debateId/message',
       'POST /api/debates/:debateId/vote',
       'POST /api/debates/:debateId/comment',
@@ -118,4 +117,18 @@ app.onError((err, c) => {
   }, 500);
 });
 
-export default app;
+const worker: ExportedHandler<Env> = {
+  fetch: (request, env, ctx) => app.fetch(request, env, ctx),
+  scheduled: async (_event, env, ctx) => {
+    ctx.waitUntil((async () => {
+      try {
+        const result = await runDebateProgressSweep(env);
+        console.log('[cron] debate progress sweep', result);
+      } catch (error) {
+        console.error('[cron] debate progress sweep failed', error);
+      }
+    })());
+  },
+};
+
+export default worker;

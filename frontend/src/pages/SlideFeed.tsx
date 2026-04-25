@@ -118,6 +118,7 @@ export function SlideFeedPage() {
   const detailsRef = useRef<Record<string, DebateSnapshot>>({});
   const autoNextTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const endedDebatesRef = useRef<Set<string>>(new Set());
+  const unknownSyncAtRef = useRef(0);
   const currentIndexRef = useRef(0);
   const cardsRef = useRef<HomeLiveCard[]>([]);
 
@@ -329,52 +330,277 @@ export function SlideFeedPage() {
     }, 3000);
   }, [clearDebateArtifacts, showToast]);
 
+  const syncUnknownDebate = useCallback(() => {
+    const now = Date.now();
+    if (now - unknownSyncAtRef.current < 3000) {
+      return;
+    }
+    unknownSyncAtRef.current = now;
+    void refreshLiveCards();
+  }, [refreshLiveCards]);
+
   const startRealtime = useCallback(() => {
     if (!supabaseRealtime) return;
 
     teardownRealtime();
 
+    const channelId =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
     const channel = supabaseRealtime
-      .channel(`slide-feed-${Date.now()}`)
+      .channel(`slide-feed-${channelId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'debate_messages' }, (payload) => {
-        const row = payload.new as { debate_id?: string };
+        const row = payload.new as {
+          debate_id?: string;
+          id?: string;
+          user_id?: string;
+          side?: 'pro' | 'con';
+          turn_number?: number;
+          content?: string;
+          created_at?: string;
+        };
         const debateId = row.debate_id;
         if (!debateId) return;
 
-        const currentId = cardsRef.current[currentIndexRef.current]?.debateId;
-        if (debateId === currentId) {
-          fetchDebateDetail(debateId);
-        } else {
+        if (!row.id || !row.side || !row.content || !row.created_at || typeof row.turn_number !== 'number') {
           pendingByDebateRef.current[debateId] = true;
+          return;
+        }
+
+        const messageId = row.id;
+        const messageSide = row.side;
+        const messageContent = row.content;
+        const messageCreatedAt = row.created_at;
+        const messageTurnNumber = row.turn_number;
+        const messageUserId = row.user_id;
+
+        let hasDetail = false;
+
+        setDetailsById((prev) => {
+          const current = prev[debateId];
+          if (!current) return prev;
+          hasDetail = true;
+          if (current.messages.some((message) => message.id === messageId)) return prev;
+
+          const displayName = messageSide === 'pro'
+            ? current.participants.pro.displayName
+            : current.participants.con.displayName;
+          const avatarUrl = messageSide === 'pro'
+            ? current.participants.pro.avatarUrl
+            : current.participants.con.avatarUrl;
+
+          return {
+            ...prev,
+            [debateId]: {
+              ...current,
+              messages: [
+                ...current.messages,
+                {
+                  id: messageId,
+                  side: messageSide,
+                  turnNumber: messageTurnNumber,
+                  content: messageContent,
+                  createdAt: messageCreatedAt,
+                  user: {
+                    id: messageUserId ?? `${messageSide}-user`,
+                    displayName,
+                    avatarUrl,
+                  },
+                },
+              ],
+            },
+          };
+        });
+
+        if (!hasDetail) {
+          pendingByDebateRef.current[debateId] = true;
+          const knownCard = cardsRef.current.some((card) => card.debateId === debateId);
+          if (!knownCard) {
+            syncUnknownDebate();
+          }
         }
       })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'debate_comments' }, (payload) => {
-        const row = payload.new as { debate_id?: string; id?: string; content?: string };
+        const row = payload.new as {
+          debate_id?: string;
+          id?: string;
+          user_id?: string;
+          content?: string;
+          created_at?: string;
+        };
         const debateId = row.debate_id;
         if (!debateId) return;
 
-        const currentId = cardsRef.current[currentIndexRef.current]?.debateId;
         if (row.content) {
           queueTicker(debateId, row.content, row.id);
         }
 
-        if (debateId === currentId) {
-          fetchDebateDetail(debateId);
-        } else {
+        if (!row.id || !row.content) {
           pendingByDebateRef.current[debateId] = true;
+          return;
+        }
+
+        const commentId = row.id;
+        const commentContent = row.content;
+
+        let hasDetail = false;
+
+        setDetailsById((prev) => {
+          const current = prev[debateId];
+          if (!current) return prev;
+          hasDetail = true;
+          if (current.comments.some((comment) => comment.id === commentId)) return prev;
+
+          const knownUser = row.user_id
+            ? current.comments.find((comment) => comment.user.id === row.user_id)?.user
+            : undefined;
+
+          const displayName = knownUser?.displayName
+            ?? (row.user_id && row.user_id === user?.id ? (user?.displayName ?? 'あなた') : 'ユーザー');
+
+          return {
+            ...prev,
+            [debateId]: {
+              ...current,
+              comments: [
+                ...current.comments,
+                {
+                  id: commentId,
+                  content: commentContent,
+                  createdAt: row.created_at ?? new Date().toISOString(),
+                  user: {
+                    id: row.user_id ?? `comment-${commentId}`,
+                    displayName,
+                    avatarUrl: knownUser?.avatarUrl ?? null,
+                  },
+                },
+              ],
+              metrics: {
+                ...current.metrics,
+                commentCount: current.metrics.commentCount + 1,
+              },
+            },
+          };
+        });
+
+        if (!hasDetail) {
+          pendingByDebateRef.current[debateId] = true;
+          const knownCard = cardsRef.current.some((card) => card.debateId === debateId);
+          if (!knownCard) {
+            syncUnknownDebate();
+          }
         }
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'debate_state' }, (payload) => {
-        const row = (payload.new ?? payload.old) as { debate_id?: string; status?: string; pro_votes?: number; con_votes?: number };
+        const row = (payload.new ?? payload.old) as {
+          debate_id?: string;
+          status?: DebateSnapshot['status'];
+          pro_votes?: number;
+          con_votes?: number;
+          current_turn?: 'pro' | 'con' | null;
+          turn_number?: number;
+          started_at?: string | null;
+          turn_started_at?: string | null;
+          voting_started_at?: string | null;
+          updated_at?: string;
+        };
         const debateId = row.debate_id;
         if (!debateId) return;
 
-        const currentId = cardsRef.current[currentIndexRef.current]?.debateId;
+        setDetailsById((prev) => {
+          const current = prev[debateId];
+          if (!current) return prev;
 
-        if (debateId === currentId) {
-          if (typeof row.pro_votes === 'number' && typeof row.con_votes === 'number') {
-            const proVotes = row.pro_votes;
-            const conVotes = row.con_votes;
+          const proVotes = typeof row.pro_votes === 'number' ? row.pro_votes : current.votes.pro;
+          const conVotes = typeof row.con_votes === 'number' ? row.con_votes : current.votes.con;
+
+          return {
+            ...prev,
+            [debateId]: {
+              ...current,
+              status: row.status ?? current.status,
+              turn: {
+                current: row.current_turn ?? current.turn.current,
+                number: typeof row.turn_number === 'number' ? row.turn_number : current.turn.number,
+              },
+              votes: {
+                ...current.votes,
+                pro: proVotes,
+                con: conVotes,
+                total: proVotes + conVotes,
+                empty: proVotes + conVotes === 0,
+              },
+              timing: {
+                ...current.timing,
+                startedAt: row.started_at ?? current.timing.startedAt,
+                turnStartedAt: row.turn_started_at ?? current.timing.turnStartedAt,
+                votingStartedAt: row.voting_started_at ?? current.timing.votingStartedAt,
+                serverNow: new Date().toISOString(),
+              },
+            },
+          };
+        });
+
+        setLiveCards((prev) => prev.map((card) => {
+          if (card.debateId !== debateId) return card;
+          return {
+            ...card,
+            startedAt: row.started_at ?? card.startedAt,
+            updatedAt: row.updated_at ?? card.updatedAt,
+            votes: {
+              pro: typeof row.pro_votes === 'number' ? row.pro_votes : card.votes.pro,
+              con: typeof row.con_votes === 'number' ? row.con_votes : card.votes.con,
+            },
+          };
+        }));
+
+        if (row.status === 'finished' || row.status === 'cancelled') {
+          handleEndedDebate(debateId);
+        }
+
+        const knownCard = cardsRef.current.some((card) => card.debateId === debateId);
+        if (!knownCard && (row.status === 'in_progress' || row.status === 'voting' || row.status === 'waiting')) {
+          syncUnknownDebate();
+        }
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'debates' }, (payload) => {
+        const row = (payload.new ?? payload.old) as {
+          id?: string;
+          title?: string;
+          is_hidden?: boolean;
+          ai_judgment?: string | null;
+        };
+
+        const debateId = row.id;
+        if (!debateId) return;
+
+        const knownCard = cardsRef.current.some((card) => card.debateId === debateId);
+        if (!knownCard && row.is_hidden !== true) {
+          syncUnknownDebate();
+          return;
+        }
+
+        if (row.is_hidden === true || payload.eventType === 'DELETE') {
+          clearDebateArtifacts(debateId);
+          setLiveCards((prev) => {
+            const next = prev.filter((card) => card.debateId !== debateId);
+            if (next.length === prev.length) return prev;
+            return next;
+          });
+          return;
+        }
+
+        if (row.title) {
+          setLiveCards((prev) => prev.map((card) => (
+            card.debateId === debateId ? { ...card, topicTitle: row.title ?? card.topicTitle } : card
+          )));
+        }
+
+        if (row.ai_judgment) {
+          try {
+            const parsed = JSON.parse(row.ai_judgment) as DebateSnapshot['result'];
             setDetailsById((prev) => {
               const current = prev[debateId];
               if (!current) return prev;
@@ -382,31 +608,14 @@ export function SlideFeedPage() {
                 ...prev,
                 [debateId]: {
                   ...current,
-                  votes: {
-                    ...current.votes,
-                    pro: proVotes,
-                    con: conVotes,
-                    total: proVotes + conVotes,
-                    empty: proVotes + conVotes === 0,
-                  },
+                  result: parsed,
                 },
               };
             });
+          } catch {
+            // JSON parse error is ignored
           }
-
-          if (row.status === 'finished' || row.status === 'cancelled') {
-            handleEndedDebate(debateId);
-          }
-        } else {
-          pendingByDebateRef.current[debateId] = true;
         }
-
-        if (row.status === 'in_progress' || row.status === 'voting' || row.status === 'finished' || row.status === 'cancelled') {
-          refreshLiveCards();
-        }
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'debates' }, () => {
-        refreshLiveCards();
       })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
@@ -433,7 +642,7 @@ export function SlideFeedPage() {
       });
 
     channelRef.current = channel;
-  }, [fetchDebateDetail, handleEndedDebate, queueTicker, refreshLiveCards, teardownRealtime]);
+  }, [clearDebateArtifacts, handleEndedDebate, queueTicker, refreshLiveCards, syncUnknownDebate, teardownRealtime, user]);
 
   useEffect(() => {
     refreshLiveCards();
@@ -762,14 +971,44 @@ export function SlideFeedPage() {
       const response = await debateApi.sendComment(currentDebateId, content);
       setCommentInput('');
       queueTicker(currentDebateId, response.comment.content, response.comment.id);
-      fetchDebateDetail(currentDebateId);
+      setDetailsById((prev) => {
+        const current = prev[currentDebateId];
+        if (!current) return prev;
+        if (current.comments.some((comment) => comment.id === response.comment.id)) return prev;
+
+        const knownUser = current.comments.find((comment) => comment.user.id === user?.id)?.user;
+
+        return {
+          ...prev,
+          [currentDebateId]: {
+            ...current,
+            comments: [
+              ...current.comments,
+              {
+                id: response.comment.id,
+                content: response.comment.content,
+                createdAt: response.comment.created_at,
+                user: {
+                  id: user?.id ?? `comment-${response.comment.id}`,
+                  displayName: knownUser?.displayName ?? user?.displayName ?? 'あなた',
+                  avatarUrl: knownUser?.avatarUrl ?? user?.avatarUrl ?? null,
+                },
+              },
+            ],
+            metrics: {
+              ...current.metrics,
+              commentCount: current.metrics.commentCount + 1,
+            },
+          },
+        };
+      });
     } catch (sendError) {
       const message = sendError instanceof Error ? sendError.message : 'コメント送信に失敗しました';
       showToast(message, 'error');
     } finally {
       setIsSendingComment(false);
     }
-  }, [commentInput, currentDebateId, currentDetail, fetchDebateDetail, queueTicker, showToast]);
+  }, [commentInput, currentDebateId, currentDetail, queueTicker, showToast, user]);
 
   const handleShare = useCallback(async () => {
     if (!currentDebateId) return;

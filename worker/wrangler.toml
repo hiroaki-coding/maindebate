@@ -12,6 +12,9 @@ ENABLE_TEMP_CORS_DOMAINS = "true"
 [dev]
 port = 8788
 
+[triggers]
+crons = ["* * * * *"]
+
 # Durable Objects
 [[durable_objects.bindings]]
 name = "DEBATE_ROOM"

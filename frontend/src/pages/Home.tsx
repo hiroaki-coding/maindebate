@@ -185,13 +185,169 @@ export function HomePage() {
 
     teardownRealtime();
 
+    const channelId =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
     const channel = supabaseRealtime
-      .channel(`home-live-feed-${Date.now()}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'debate_state' }, () => {
-        fetchCards();
+      .channel(`home-live-feed-${channelId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'debate_state' }, (payload) => {
+        const row = (payload.new ?? payload.old) as {
+          debate_id?: string;
+          status?: string;
+          pro_votes?: number;
+          con_votes?: number;
+          started_at?: string | null;
+          updated_at?: string;
+        };
+
+        const debateId = row.debate_id;
+        if (!debateId) return;
+
+        const knownDebate =
+          cardsRef.current.liveCards.some((card) => card.debateId === debateId)
+          || cardsRef.current.archivedCards.some((card) => card.debateId === debateId);
+        if (!knownDebate && (row.status === 'in_progress' || row.status === 'voting' || row.status === 'waiting')) {
+          void fetchCards();
+          return;
+        }
+
+        setCards((prev) => {
+          let changed = false;
+
+          let nextLive = prev.liveCards.map((card) => {
+            if (card.debateId !== debateId) return card;
+            changed = true;
+            return {
+              ...card,
+              startedAt: row.started_at ?? card.startedAt,
+              updatedAt: row.updated_at ?? card.updatedAt,
+              votes: {
+                pro: typeof row.pro_votes === 'number' ? row.pro_votes : card.votes.pro,
+                con: typeof row.con_votes === 'number' ? row.con_votes : card.votes.con,
+              },
+            };
+          });
+
+          let nextArchived = prev.archivedCards.map((card) => {
+            if (card.debateId !== debateId) return card;
+            changed = true;
+            const pro = typeof row.pro_votes === 'number' ? row.pro_votes : card.votes.pro;
+            const con = typeof row.con_votes === 'number' ? row.con_votes : card.votes.con;
+            return {
+              ...card,
+              votes: {
+                pro,
+                con,
+                total: pro + con,
+              },
+            };
+          });
+
+          if ((row.status === 'finished' || row.status === 'cancelled') && nextLive.some((card) => card.debateId === debateId)) {
+            const ended = nextLive.find((card) => card.debateId === debateId);
+            if (ended) {
+              const existsArchived = nextArchived.some((card) => card.debateId === debateId);
+              if (!existsArchived) {
+                nextArchived = [
+                  {
+                    debateId: ended.debateId,
+                    status: 'archived',
+                    topicTitle: ended.topicTitle,
+                    startedAt: ended.startedAt,
+                    endedAt: new Date().toISOString(),
+                    viewerCount: ended.viewerCount,
+                    votes: {
+                      pro: ended.votes.pro,
+                      con: ended.votes.con,
+                      total: ended.votes.pro + ended.votes.con,
+                    },
+                    participants: ended.participants,
+                  },
+                  ...nextArchived,
+                ];
+              }
+              nextLive = nextLive.filter((card) => card.debateId !== debateId);
+              changed = true;
+            }
+          }
+
+          if (!changed) return prev;
+
+          const next = {
+            ...prev,
+            liveCards: nextLive,
+            archivedCards: nextArchived,
+            serverTime: new Date().toISOString(),
+          };
+          cardsRef.current = next;
+          return next;
+        });
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'debates' }, () => {
-        fetchCards();
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'debates' }, (payload) => {
+        const row = (payload.new ?? payload.old) as {
+          id?: string;
+          is_hidden?: boolean;
+          title?: string;
+        };
+
+        const debateId = row.id;
+        if (!debateId) return;
+
+        const knownDebate =
+          cardsRef.current.liveCards.some((card) => card.debateId === debateId)
+          || cardsRef.current.archivedCards.some((card) => card.debateId === debateId);
+        if (!knownDebate && row.is_hidden !== true) {
+          void fetchCards();
+          return;
+        }
+
+        setCards((prev) => {
+          let changed = false;
+
+          let nextLive = prev.liveCards;
+          let nextArchived = prev.archivedCards;
+
+          if (row.is_hidden === true) {
+            const filteredLive = prev.liveCards.filter((card) => card.debateId !== debateId);
+            const filteredArchived = prev.archivedCards.filter((card) => card.debateId !== debateId);
+            if (filteredLive.length !== prev.liveCards.length || filteredArchived.length !== prev.archivedCards.length) {
+              nextLive = filteredLive;
+              nextArchived = filteredArchived;
+              changed = true;
+            }
+          } else {
+            const debateTitle = row.title;
+            if (!debateTitle) {
+              return prev;
+            }
+
+            const renamedLive = prev.liveCards.map((card) => {
+              if (card.debateId !== debateId) return card;
+              changed = true;
+              return { ...card, topicTitle: debateTitle };
+            });
+            const renamedArchived = prev.archivedCards.map((card) => {
+              if (card.debateId !== debateId) return card;
+              changed = true;
+              return { ...card, topicTitle: debateTitle };
+            });
+            nextLive = renamedLive;
+            nextArchived = renamedArchived;
+          }
+
+          if (!changed) return prev;
+
+          const next = {
+            ...prev,
+            liveCards: nextLive,
+            archivedCards: nextArchived,
+            serverTime: new Date().toISOString(),
+          };
+          cardsRef.current = next;
+          return next;
+        });
       })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {

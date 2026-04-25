@@ -63,6 +63,12 @@ function scrollToBottom(element: HTMLElement | null, behavior: ScrollBehavior = 
   element.scrollTo({ top: element.scrollHeight, behavior });
 }
 
+function calcRemaining(startIso: string | null | undefined, durationSec: number, nowMs: number): number {
+  if (!startIso) return Math.max(0, durationSec);
+  const diff = Math.floor((nowMs - new Date(startIso).getTime()) / 1000);
+  return Math.max(0, durationSec - diff);
+}
+
 export function DebateRoomPage() {
   const { debateId } = useParams<{ debateId: string }>();
   const navigate = useNavigate();
@@ -85,22 +91,32 @@ export function DebateRoomPage() {
   const [reporting, setReporting] = useState(false);
   const [isStartingDebate, setIsStartingDebate] = useState(false);
   const [activeTickers, setActiveTickers] = useState<TickerItem[]>([]);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [viewerCount, setViewerCount] = useState(0);
 
   const previousTurnRef = useRef<string | null>(null);
-  const snapshotRef = useRef<DebateSnapshot | null>(null);
   const messageScrollRef = useRef<HTMLDivElement | null>(null);
   const commentScrollRef = useRef<HTMLDivElement | null>(null);
   const lastTickerCommentIdRef = useRef<string | null>(null);
   const tickerInitializedRef = useRef(false);
   const tickerTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const progressInFlightRef = useRef(false);
+  const progressBoundaryRef = useRef<string | null>(null);
+  const presenceSyncedRef = useRef(false);
 
   const mySide = snapshot?.role === 'pro' || snapshot?.role === 'con' ? snapshot.role : null;
   const isDebater = mySide !== null;
   const isInProgress = snapshot?.status === 'in_progress';
+  const overallRemainingSec = snapshot
+    ? calcRemaining(snapshot.timing.startedAt, snapshot.timers.debateDurationSec, nowMs)
+    : 0;
+  const turnRemainingSec = snapshot && snapshot.status === 'in_progress'
+    ? calcRemaining(snapshot.timing.turnStartedAt, snapshot.timers.turnDurationSec, nowMs)
+    : 0;
   const isTurnOwner = Boolean(snapshot && isDebater && snapshot.status === 'in_progress' && snapshot.turn.current === mySide);
   const isLocked = Boolean(
     snapshot &&
-      (snapshot.status === 'finished' || snapshot.status === 'cancelled' || snapshot.timers.overallRemainingSec <= 0)
+      (snapshot.status === 'finished' || snapshot.status === 'cancelled' || overallRemainingSec <= 0)
   );
   const canSendMessage = Boolean(snapshot && isDebater && isTurnOwner && !isLocked);
   const canVote = Boolean(snapshot && isInProgress && snapshot.role !== 'guest' && !isLocked);
@@ -156,9 +172,16 @@ export function DebateRoomPage() {
 
   useEffect(() => {
     if (!snapshot) return;
-    snapshotRef.current = snapshot;
     applyTurnNotification(snapshot);
   }, [snapshot, applyTurnNotification]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (!snapshot) return;
@@ -249,6 +272,12 @@ export function DebateRoomPage() {
   }, [refreshSnapshot]);
 
   useEffect(() => {
+    if (!snapshot) return;
+    if (presenceSyncedRef.current) return;
+    setViewerCount(snapshot.metrics.viewerCount);
+  }, [snapshot]);
+
+  useEffect(() => {
     if (!snapshot || !debateId) return;
     if (snapshot.role === 'spectator' || snapshot.role === 'guest') {
       navigate(`/feed?debateId=${debateId}`, { replace: true });
@@ -256,112 +285,234 @@ export function DebateRoomPage() {
   }, [snapshot, debateId, navigate]);
 
   useEffect(() => {
-    if (!debateId) return;
+    if (!debateId || !snapshot || snapshot.status !== 'in_progress') {
+      progressBoundaryRef.current = null;
+      return;
+    }
 
-    const tickId = setInterval(async () => {
-      try {
-        const tick = await debateApi.tick(debateId);
-        const prevSnapshot = snapshotRef.current;
-        setSnapshot((prev) => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            status: tick.status,
-            turn: {
-              current: tick.currentTurn,
-              number: tick.turnNumber,
-            },
-            timers: {
-              ...prev.timers,
-              overallRemainingSec: tick.timers.overallRemainingSec,
-              turnRemainingSec: tick.timers.turnRemainingSec,
-              dangerOverall: tick.timers.overallRemainingSec <= 30,
-              dangerTurn: tick.timers.turnRemainingSec <= 5,
-            },
-            votes: {
-              ...prev.votes,
-              pro: tick.votes.pro,
-              con: tick.votes.con,
-              total: tick.votes.total,
-              empty: tick.votes.total === 0,
-            },
-            result: tick.result ?? prev.result,
-          };
-        });
+    const overallExpired = overallRemainingSec <= 0;
+    const turnExpired = turnRemainingSec <= 0;
 
-        if (
-          prevSnapshot &&
-          (
-            prevSnapshot.turn.number !== tick.turnNumber ||
-            prevSnapshot.turn.current !== tick.currentTurn ||
-            prevSnapshot.status !== tick.status
-          )
-        ) {
-          await refreshSnapshot();
-        }
-      } catch {
-        // tickの失敗は一時的な通信エラーとして扱う
-      }
-    }, 1000);
+    if (!overallExpired && !turnExpired) {
+      progressBoundaryRef.current = null;
+      return;
+    }
 
-    const heartbeatId = setInterval(async () => {
-      try {
-        await debateApi.heartbeat(debateId);
-      } catch {
-        // heartbeatは失敗しても画面表示は継続
-      }
-    }, 15_000);
+    const boundaryKey = `${snapshot.status}:${snapshot.turn.current ?? 'none'}:${snapshot.turn.number}:${overallExpired ? 'O' : '-'}:${turnExpired ? 'T' : '-'}`;
+    if (progressBoundaryRef.current === boundaryKey) {
+      return;
+    }
+    if (progressInFlightRef.current) {
+      return;
+    }
 
-    return () => {
-      clearInterval(tickId);
-      clearInterval(heartbeatId);
-    };
-  }, [debateId, refreshSnapshot]);
+    progressBoundaryRef.current = boundaryKey;
+    progressInFlightRef.current = true;
 
-  useEffect(() => {
-    if (!debateId || !isInProgress) return;
-
-    const syncId = setInterval(() => {
-      void refreshSnapshot();
-    }, 3000);
-
-    return () => clearInterval(syncId);
-  }, [debateId, isInProgress, refreshSnapshot]);
+    void debateApi.progress(debateId).finally(() => {
+      progressInFlightRef.current = false;
+    });
+  }, [debateId, snapshot, overallRemainingSec, turnRemainingSec]);
 
   useEffect(() => {
     if (!debateId || !supabaseRealtime) return;
 
     const realtime = supabaseRealtime;
+    const channelId =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+    presenceSyncedRef.current = false;
 
     const channel = realtime
-      .channel(`debate-live-${debateId}`)
+      .channel(`debate-live-${debateId}-${channelId}`, {
+        config: {
+          presence: {
+            key: user?.id ?? `guest-${channelId}`,
+          },
+        },
+      })
+      .on('presence', { event: 'sync' }, () => {
+        presenceSyncedRef.current = true;
+        const state = channel.presenceState();
+        setViewerCount(Object.keys(state).length);
+      })
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'debate_messages', filter: `debate_id=eq.${debateId}` },
-        () => {
-          refreshSnapshot();
+        { event: 'INSERT', schema: 'public', table: 'debate_messages', filter: `debate_id=eq.${debateId}` },
+        (payload) => {
+          const row = payload.new as {
+            id?: string;
+            user_id?: string;
+            side?: 'pro' | 'con';
+            turn_number?: number;
+            content?: string;
+            created_at?: string;
+          };
+
+          if (!row.id || !row.side || !row.content || !row.created_at || typeof row.turn_number !== 'number') return;
+
+          const messageId = row.id;
+          const messageSide = row.side;
+          const messageContent = row.content;
+          const messageCreatedAt = row.created_at;
+          const messageTurnNumber = row.turn_number;
+          const messageUserId = row.user_id;
+
+          setSnapshot((prev) => {
+            if (!prev) return prev;
+            if (prev.messages.some((message) => message.id === messageId)) return prev;
+
+            const displayName = messageSide === 'pro'
+              ? prev.participants.pro.displayName
+              : prev.participants.con.displayName;
+            const avatarUrl = messageSide === 'pro'
+              ? prev.participants.pro.avatarUrl
+              : prev.participants.con.avatarUrl;
+
+            return {
+              ...prev,
+              messages: [
+                ...prev.messages,
+                {
+                  id: messageId,
+                  side: messageSide,
+                  turnNumber: messageTurnNumber,
+                  content: messageContent,
+                  createdAt: messageCreatedAt,
+                  user: {
+                    id: messageUserId ?? `${messageSide}-user`,
+                    displayName,
+                    avatarUrl,
+                  },
+                },
+              ],
+            };
+          });
         }
       )
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'debate_comments', filter: `debate_id=eq.${debateId}` },
-        () => {
-          refreshSnapshot();
+        { event: 'INSERT', schema: 'public', table: 'debate_comments', filter: `debate_id=eq.${debateId}` },
+        (payload) => {
+          const row = payload.new as {
+            id?: string;
+            user_id?: string;
+            content?: string;
+            created_at?: string;
+          };
+
+          if (!row.id || !row.content || !row.created_at) return;
+
+          const commentId = row.id;
+          const commentContent = row.content;
+          const commentCreatedAt = row.created_at;
+          const commentUserId = row.user_id;
+
+          setSnapshot((prev) => {
+            if (!prev) return prev;
+            if (prev.comments.some((comment) => comment.id === commentId)) return prev;
+
+            const knownUser = commentUserId
+              ? prev.comments.find((comment) => comment.user.id === commentUserId)?.user
+              : undefined;
+
+            const displayName = knownUser?.displayName
+              ?? (commentUserId && commentUserId === user?.id ? user.displayName : 'ユーザー');
+
+            return {
+              ...prev,
+              comments: [
+                ...prev.comments,
+                {
+                  id: commentId,
+                  content: commentContent,
+                  createdAt: commentCreatedAt,
+                  user: {
+                    id: commentUserId ?? `comment-${commentId}`,
+                    displayName,
+                    avatarUrl: knownUser?.avatarUrl ?? null,
+                  },
+                },
+              ],
+              metrics: {
+                ...prev.metrics,
+                commentCount: prev.metrics.commentCount + 1,
+              },
+            };
+          });
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'debate_state', filter: `debate_id=eq.${debateId}` },
-        () => {
-          refreshSnapshot();
+        (payload) => {
+          const row = (payload.new ?? payload.old) as {
+            status?: DebateSnapshot['status'];
+            current_turn?: 'pro' | 'con' | null;
+            turn_number?: number;
+            pro_votes?: number;
+            con_votes?: number;
+            started_at?: string | null;
+            turn_started_at?: string | null;
+            voting_started_at?: string | null;
+          };
+
+          setSnapshot((prev) => {
+            if (!prev) return prev;
+
+            const proVotes = typeof row.pro_votes === 'number' ? row.pro_votes : prev.votes.pro;
+            const conVotes = typeof row.con_votes === 'number' ? row.con_votes : prev.votes.con;
+
+            return {
+              ...prev,
+              status: row.status ?? prev.status,
+              turn: {
+                current: row.current_turn ?? prev.turn.current,
+                number: typeof row.turn_number === 'number' ? row.turn_number : prev.turn.number,
+              },
+              votes: {
+                ...prev.votes,
+                pro: proVotes,
+                con: conVotes,
+                total: proVotes + conVotes,
+                empty: proVotes + conVotes === 0,
+              },
+              timing: {
+                ...prev.timing,
+                startedAt: row.started_at ?? prev.timing.startedAt,
+                turnStartedAt: row.turn_started_at ?? prev.timing.turnStartedAt,
+                votingStartedAt: row.voting_started_at ?? prev.timing.votingStartedAt,
+                serverNow: new Date().toISOString(),
+              },
+            };
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'debates', filter: `id=eq.${debateId}` },
+        (payload) => {
+          const row = payload.new as { ai_judgment?: string | null };
+          if (!row.ai_judgment) return;
+
+          try {
+            const parsed = JSON.parse(row.ai_judgment) as DebateSnapshot['result'];
+            setSnapshot((prev) => (prev ? { ...prev, result: parsed } : prev));
+          } catch {
+            // 判定JSONが壊れている場合は無視
+          }
         }
       )
       .subscribe();
 
+    void channel.track({ online_at: new Date().toISOString() });
+
     return () => {
       realtime.removeChannel(channel);
     };
-  }, [debateId, refreshSnapshot]);
+  }, [debateId, user]);
 
   const handleSendMessage = async () => {
     if (!debateId || !snapshot) return;
@@ -389,7 +540,6 @@ export function DebateRoomPage() {
       await debateApi.sendMessage(debateId, content);
       setMessageInput('');
       setFlash(null);
-      await refreshSnapshot();
     } catch (sendError) {
       const message = sendError instanceof Error ? sendError.message : '発言の送信に失敗しました';
       setFlash({ type: 'error', text: message });
@@ -410,10 +560,68 @@ export function DebateRoomPage() {
 
     setLastVotedAt(now);
 
+    const prevVote = snapshot.myVote ?? null;
+    const nextVote = prevVote === side ? null : side;
+    const prevPro = snapshot.votes.pro;
+    const prevCon = snapshot.votes.con;
+
+    let nextPro = prevPro;
+    let nextCon = prevCon;
+
+    if (prevVote === 'pro') nextPro -= 1;
+    if (prevVote === 'con') nextCon -= 1;
+    if (nextVote === 'pro') nextPro += 1;
+    if (nextVote === 'con') nextCon += 1;
+
+    setSnapshot((prev) => {
+      if (!prev) return prev;
+      const total = Math.max(0, nextPro + nextCon);
+      return {
+        ...prev,
+        myVote: nextVote,
+        votes: {
+          ...prev.votes,
+          pro: Math.max(0, nextPro),
+          con: Math.max(0, nextCon),
+          total,
+          empty: total <= 0,
+        },
+      };
+    });
+
     try {
-      await debateApi.vote(debateId, side);
-      await refreshSnapshot();
+      const result = await debateApi.vote(debateId, side);
+      setSnapshot((prev) => {
+        if (!prev) return prev;
+        const total = result.proVotes + result.conVotes;
+        return {
+          ...prev,
+          myVote: result.votedSide,
+          votes: {
+            ...prev.votes,
+            pro: result.proVotes,
+            con: result.conVotes,
+            total,
+            empty: total <= 0,
+          },
+        };
+      });
     } catch (voteError) {
+      setSnapshot((prev) => {
+        if (!prev) return prev;
+        const total = prevPro + prevCon;
+        return {
+          ...prev,
+          myVote: prevVote,
+          votes: {
+            ...prev.votes,
+            pro: prevPro,
+            con: prevCon,
+            total,
+            empty: total <= 0,
+          },
+        };
+      });
       if (voteError instanceof ApiError && voteError.statusCode === 429 && typeof voteError.retryAfterSec === 'number') {
         setRetryAfterSec(voteError.retryAfterSec);
       }
@@ -428,7 +636,6 @@ export function DebateRoomPage() {
     setIsStartingDebate(true);
     try {
       await debateApi.startDebate(debateId);
-      await refreshSnapshot();
       setFlash({ type: 'info', text: 'ディベートを開始しました' });
       setTimeout(() => setFlash(null), 1500);
     } catch (startError) {
@@ -448,9 +655,33 @@ export function DebateRoomPage() {
 
     setIsSubmittingComment(true);
     try {
-      await debateApi.sendComment(debateId, content);
+      const response = await debateApi.sendComment(debateId, content);
       setCommentInput('');
-      await refreshSnapshot();
+
+      setSnapshot((prev) => {
+        if (!prev) return prev;
+        const knownUser = prev.comments.find((comment) => comment.user.id === user?.id)?.user;
+        return {
+          ...prev,
+          comments: [
+            ...prev.comments,
+            {
+              id: response.comment.id,
+              content: response.comment.content,
+              createdAt: response.comment.created_at,
+              user: {
+                id: user?.id ?? `comment-${response.comment.id}`,
+                displayName: knownUser?.displayName ?? user?.displayName ?? 'あなた',
+                avatarUrl: knownUser?.avatarUrl ?? user?.avatarUrl ?? null,
+              },
+            },
+          ],
+          metrics: {
+            ...prev.metrics,
+            commentCount: prev.metrics.commentCount + 1,
+          },
+        };
+      });
     } catch (commentError) {
       if (commentError instanceof ApiError && commentError.statusCode === 429 && typeof commentError.retryAfterSec === 'number') {
         setRetryAfterSec(commentError.retryAfterSec);
@@ -639,8 +870,8 @@ export function DebateRoomPage() {
                   相手を通報
                 </button>
               )}
-              <p className={`text-sm font-semibold ${snapshot.timers.dangerOverall ? 'text-[#D93025]' : 'text-slate-600'}`}>
-                {formatClock(snapshot.timers.overallRemainingSec)}
+              <p className={`text-sm font-semibold ${overallRemainingSec <= 30 ? 'text-[#D93025]' : 'text-slate-600'}`}>
+                {formatClock(overallRemainingSec)}
               </p>
             </div>
           </div>
@@ -703,7 +934,7 @@ export function DebateRoomPage() {
           <div className="sticky top-[88px] z-10 border-b border-slate-100 bg-white/90 px-4 py-2 backdrop-blur lg:top-[110px]">
             <div className="flex items-center justify-between text-xs text-slate-500">
               <p>ターン: {snapshot.turn.number} / 担当: {turnOwnerName}</p>
-              <p>視聴者 {snapshot.metrics.viewerCount}人</p>
+              <p>視聴者 {viewerCount}人</p>
             </div>
           </div>
 
@@ -747,8 +978,8 @@ export function DebateRoomPage() {
           <div className="space-y-3">
             {isDebater && (
               <div className="flex items-center justify-between">
-                <p className={`text-sm font-medium ${snapshot.timers.dangerTurn ? 'text-[#D93025] animate-pulse' : 'text-slate-600'}`}>
-                  ターンタイマー: {formatTurnSec(snapshot.timers.turnRemainingSec)}
+                <p className={`text-sm font-medium ${turnRemainingSec <= 5 ? 'text-[#D93025] animate-pulse' : 'text-slate-600'}`}>
+                  ターンタイマー: {formatTurnSec(turnRemainingSec)}
                 </p>
                 <p className="text-xs text-slate-500">
                   {snapshot.status !== 'in_progress' ? '開始待ちです' : isTurnOwner ? 'あなたのターンです' : '相手のターンです'}

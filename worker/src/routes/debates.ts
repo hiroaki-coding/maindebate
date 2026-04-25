@@ -29,6 +29,7 @@ type DebateStateRow = {
   status: DebateStatus;
   current_turn: DebateSide | null;
   turn_number: number;
+  version?: number;
   started_at: string | null;
   turn_started_at: string | null;
   voting_started_at: string | null;
@@ -1396,7 +1397,6 @@ async function buildSnapshotPayload(
   const locked = !debateActive || advancedState.status === 'finished' || advancedState.status === 'cancelled' || overallRemainingSec <= 0;
 
   const parsedResult = finalResult ?? (await parseAiJudgment(context.debate.ai_judgment));
-  const viewerCount = await getActiveViewerCount(supabase, context.debate.id);
   const myVote = myVoteRes.data?.voted_side ?? null;
 
   return {
@@ -1451,7 +1451,14 @@ async function buildSnapshotPayload(
     myVote,
     metrics: {
       commentCount: comments.length,
-      viewerCount,
+      // Presenceベースへ移行したため、初期値のみ返す。
+      viewerCount: 0,
+    },
+    timing: {
+      serverNow: new Date().toISOString(),
+      startedAt: advancedState.started_at,
+      turnStartedAt: advancedState.turn_started_at,
+      votingStartedAt: advancedState.voting_started_at,
     },
     messages: messages.map((message) => ({
       id: message.id,
@@ -1477,6 +1484,60 @@ async function buildSnapshotPayload(
     })),
     result: parsedResult,
   };
+}
+
+export async function runDebateProgressSweep(env: Env, limit = 120): Promise<{ scanned: number; progressed: number }> {
+  if (!hasSupabaseConfig(env)) {
+    return { scanned: 0, progressed: 0 };
+  }
+
+  const supabase = getSupabase(env);
+  const { data, error } = await supabase
+    .from('debate_state')
+    .select('debate_id, status, updated_at')
+    .in('status', ['in_progress', 'voting'])
+    .order('updated_at', { ascending: true })
+    .limit(limit);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const rows = (data ?? []) as Array<{ debate_id: string; status: DebateStatus; updated_at: string }>;
+  let progressed = 0;
+
+  for (const row of rows) {
+    const context = await getDebateContext(supabase, row.debate_id, null);
+    if (!context) continue;
+
+    const before = {
+      status: context.state.status,
+      currentTurn: context.state.current_turn,
+      turnNumber: context.state.turn_number,
+      updatedAt: context.state.updated_at,
+    };
+
+    const { state } = await advanceDebate(env, supabase, context);
+
+    const changed =
+      before.status !== state.status
+      || before.currentTurn !== state.current_turn
+      || before.turnNumber !== state.turn_number
+      || before.updatedAt !== state.updated_at;
+
+    if (!changed) continue;
+
+    progressed += 1;
+    await publishRealtimeEvent(env, row.debate_id, {
+      type: 'state:update',
+      source: 'cron',
+      status: state.status,
+      currentTurn: state.current_turn,
+      turnNumber: state.turn_number,
+    });
+  }
+
+  return { scanned: rows.length, progressed };
 }
 
 app.get('/:debateId/realtime/ws', authOptional, async (c) => {
@@ -1563,10 +1624,6 @@ app.get('/:debateId/snapshot', authOptional, async (c) => {
       return c.json({ error: 'Debate not found' }, 404);
     }
 
-    if (viewerUserId) {
-      await recordWatchHeartbeat(supabase, debateId, viewerUserId);
-    }
-
     const { state, finalResult } = await advanceDebate(c.env, supabase, context);
     const payload = await buildSnapshotPayload(supabase, context, state, finalResult);
     await publishRealtimeEvent(c.env, debateId, {
@@ -1585,7 +1642,7 @@ app.get('/:debateId/snapshot', authOptional, async (c) => {
   }
 });
 
-app.get('/:debateId/tick', authOptional, async (c) => {
+app.post('/:debateId/progress', authOptional, async (c) => {
   if (!hasSupabaseConfig(c.env)) {
     return c.json({ error: 'Supabase credentials are not configured' }, 500);
   }
@@ -1605,50 +1662,25 @@ app.get('/:debateId/tick', authOptional, async (c) => {
       return c.json({ error: 'Debate not found' }, 404);
     }
 
-    if (viewerUserId) {
-      await recordWatchHeartbeat(supabase, debateId, viewerUserId);
-    }
-
     const { state, finalResult } = await advanceDebate(c.env, supabase, context);
-    const now = Date.now();
-
     await publishRealtimeEvent(c.env, debateId, {
-      type: 'timer:update',
-      source: 'tick',
+      type: 'state:update',
+      source: 'progress',
       status: state.status,
       currentTurn: state.current_turn,
       turnNumber: state.turn_number,
-      payload: {
-        overallRemainingSec: calculateRemainingSec(state.started_at, context.debate.debate_duration_sec, now),
-        turnRemainingSec:
-          state.status === 'in_progress'
-            ? calculateRemainingSec(state.turn_started_at, context.debate.turn_duration_sec, now)
-            : 0,
-      },
     });
 
     return c.json({
       status: state.status,
       currentTurn: state.current_turn,
       turnNumber: state.turn_number,
-      timers: {
-        overallRemainingSec: calculateRemainingSec(state.started_at, context.debate.debate_duration_sec, now),
-        turnRemainingSec:
-          state.status === 'in_progress'
-            ? calculateRemainingSec(state.turn_started_at, context.debate.turn_duration_sec, now)
-            : 0,
-      },
-      votes: {
-        pro: state.pro_votes,
-        con: state.con_votes,
-        total: state.pro_votes + state.con_votes,
-      },
       result: finalResult ?? (await parseAiJudgment(context.debate.ai_judgment)),
     });
   } catch (error) {
-    console.error('Debate tick error:', error);
+    console.error('Debate progress error:', error);
     addCorsToResponse(c);
-    return c.json({ error: 'ディベート進行の取得に失敗しました' }, 500);
+    return c.json({ error: 'ディベート進行の更新に失敗しました' }, 500);
   }
 });
 
@@ -1725,38 +1757,6 @@ app.post('/:debateId/start', authRequired, async (c) => {
     console.error('Debate start error:', error);
     addCorsToResponse(c);
     return c.json({ error: 'ディベート開始に失敗しました' }, 500);
-  }
-});
-
-app.post('/:debateId/heartbeat', authRequired, async (c) => {
-  if (!hasSupabaseConfig(c.env)) {
-    return c.json({ error: 'Supabase credentials are not configured' }, 500);
-  }
-
-  const debateId = c.req.param('debateId');
-  if (!debateId) {
-    return c.json({ error: 'debateId is required' }, 400);
-  }
-  const user = c.get('user');
-  const userId = typeof user?.userId === 'string' ? user.userId : null;
-
-  if (!user || !userId) {
-    return c.json({ error: 'ユーザー情報が未登録です' }, 400);
-  }
-
-  try {
-    const supabase = getSupabase(c.env);
-    await recordWatchHeartbeat(supabase, debateId, userId);
-    await publishRealtimeEvent(c.env, debateId, {
-      type: 'heartbeat',
-      source: 'heartbeat',
-      payload: { userId },
-    });
-    return c.json({ ok: true });
-  } catch (error) {
-    console.error('Debate heartbeat error:', error);
-    addCorsToResponse(c);
-    return c.json({ error: 'ハートビートの送信に失敗しました' }, 500);
   }
 });
 
