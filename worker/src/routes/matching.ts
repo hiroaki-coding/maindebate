@@ -321,17 +321,8 @@ app.post('/join', authRequired, async (c) => {
 
     const selfQueue = (selfQueueRaw as QueueRow | null) ?? null;
     if (selfQueue?.status === 'matched') {
-      const existingMatched = await loadMatchedPayload(supabase, selfQueue);
-      if (existingMatched) {
-        const stats = await getMatchingStats(supabase, normalizeMode(selfQueue.match_mode));
-        return c.json({
-          ...existingMatched,
-          mode: normalizeMode(selfQueue.match_mode),
-          queueStats: stats,
-        });
-      }
-
-      console.error('Invalid matched queue row detected on join; cleaning up', {
+      // 以前のマッチ結果は再利用せず、join ごとに新しいディベートを作る。
+      console.info('Existing matched queue row detected on join; resetting for a fresh debate', {
         userId: self.id,
         matchedDebateId: selfQueue.matched_debate_id,
       });

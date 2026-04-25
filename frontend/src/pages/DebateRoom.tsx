@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Button } from '../components/common';
 import { ApiError, debateApi, type DebateSnapshot } from '../lib/api';
 import { supabaseRealtime } from '../lib/supabase';
@@ -126,6 +126,22 @@ export function DebateRoomPage() {
       isDebater &&
       (snapshot.canStartDebate || snapshot.status === 'waiting' || snapshot.status === 'matching')
   );
+  const shouldWarnBeforeLeave = Boolean(
+    snapshot
+      && isDebater
+      && snapshot.status !== 'finished'
+      && snapshot.status !== 'cancelled'
+  );
+
+  const confirmLeaveDebate = useCallback(() => {
+    if (!shouldWarnBeforeLeave) return true;
+    return window.confirm('本当にディベートから抜けますか？');
+  }, [shouldWarnBeforeLeave]);
+
+  const handleNavigateMatching = useCallback(() => {
+    if (!confirmLeaveDebate()) return;
+    navigate('/matching');
+  }, [confirmLeaveDebate, navigate]);
 
   useEffect(() => {
     if (retryAfterSec <= 0) return;
@@ -174,6 +190,41 @@ export function DebateRoomPage() {
     if (!snapshot) return;
     applyTurnNotification(snapshot);
   }, [snapshot, applyTurnNotification]);
+
+  useEffect(() => {
+    if (!shouldWarnBeforeLeave) return;
+
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload);
+    };
+  }, [shouldWarnBeforeLeave]);
+
+  useEffect(() => {
+    if (!shouldWarnBeforeLeave) return;
+
+    const guardState = { debateLeaveGuard: true };
+    window.history.pushState(guardState, '', window.location.href);
+
+    const onPopState = () => {
+      if (confirmLeaveDebate()) {
+        window.removeEventListener('popstate', onPopState);
+        navigate(-1);
+        return;
+      }
+      window.history.pushState(guardState, '', window.location.href);
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => {
+      window.removeEventListener('popstate', onPopState);
+    };
+  }, [confirmLeaveDebate, navigate, shouldWarnBeforeLeave]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -635,7 +686,27 @@ export function DebateRoomPage() {
 
     setIsStartingDebate(true);
     try {
-      await debateApi.startDebate(debateId);
+      const started = await debateApi.startDebate(debateId);
+
+      setSnapshot((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          status: started.status,
+          canStartDebate: false,
+          turn: {
+            current: started.currentTurn,
+            number: started.turnNumber,
+          },
+          timing: {
+            ...prev.timing,
+            startedAt: started.startedAt,
+            turnStartedAt: started.turnStartedAt,
+            serverNow: new Date().toISOString(),
+          },
+        };
+      });
+
       setFlash({ type: 'info', text: 'ディベートを開始しました' });
       setTimeout(() => setFlash(null), 1500);
     } catch (startError) {
@@ -856,7 +927,13 @@ export function DebateRoomPage() {
       <header className="sticky top-0 z-40 border-b border-border-color bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-7xl px-3 py-2 md:px-5 md:py-3">
           <div className="flex items-center justify-between gap-3">
-            <Link to="/matching" className="text-xs text-slate-500 hover:text-slate-700">← マッチング</Link>
+            <button
+              type="button"
+              onClick={handleNavigateMatching}
+              className="text-xs text-slate-500 hover:text-slate-700"
+            >
+              ← マッチング
+            </button>
             <div className="min-w-0 text-center">
               <p className="truncate text-sm font-semibold md:text-base">{snapshot.topic.title}</p>
             </div>
