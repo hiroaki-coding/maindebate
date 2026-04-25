@@ -91,6 +91,7 @@ export function DebateRoomPage() {
   const [reporting, setReporting] = useState(false);
   const [isStartingDebate, setIsStartingDebate] = useState(false);
   const [activeTickers, setActiveTickers] = useState<TickerItem[]>([]);
+  const [startOverlayDismissed, setStartOverlayDismissed] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [viewerCount, setViewerCount] = useState(0);
 
@@ -273,6 +274,7 @@ export function DebateRoomPage() {
 
   useEffect(() => {
     setActiveTickers([]);
+    setStartOverlayDismissed(false);
     lastTickerCommentIdRef.current = null;
     tickerInitializedRef.current = false;
 
@@ -334,6 +336,13 @@ export function DebateRoomPage() {
       navigate(`/feed?debateId=${debateId}`, { replace: true });
     }
   }, [snapshot, debateId, navigate]);
+
+  useEffect(() => {
+    if (!snapshot) return;
+    if (snapshot.status !== 'waiting' && snapshot.status !== 'matching') {
+      setStartOverlayDismissed(true);
+    }
+  }, [snapshot]);
 
   useEffect(() => {
     if (!debateId || !snapshot || snapshot.status !== 'in_progress') {
@@ -687,6 +696,7 @@ export function DebateRoomPage() {
     setIsStartingDebate(true);
     try {
       const started = await debateApi.startDebate(debateId);
+      setStartOverlayDismissed(true);
 
       setSnapshot((prev) => {
         if (!prev) return prev;
@@ -706,6 +716,8 @@ export function DebateRoomPage() {
           },
         };
       });
+
+      void refreshSnapshot();
 
       setFlash({ type: 'info', text: 'ディベートを開始しました' });
       setTimeout(() => setFlash(null), 1500);
@@ -842,7 +854,7 @@ export function DebateRoomPage() {
     : snapshot.status === 'finished' || snapshot.status === 'cancelled'
       ? 'コメントは終了しました'
       : 'ディベート開始後にコメントできます';
-  const showStartOverlay = isDebater && (snapshot.status === 'waiting' || snapshot.status === 'matching');
+  const showStartOverlay = !startOverlayDismissed && isDebater && (snapshot.status === 'waiting' || snapshot.status === 'matching');
   const mySideLabel = mySide === 'pro' ? '賛成' : mySide === 'con' ? '反対' : '---';
   const opponentName = mySide === 'pro'
     ? snapshot.participants.con.displayName
