@@ -306,7 +306,19 @@ export const debateApi = {
     }),
 
   sendMessage: (debateId: string, content: string) =>
-    request<{ nextTurn: 'pro' | 'con'; nextTurnNumber: number }>(`/api/debates/${debateId}/message`, {
+    request<{
+      message: {
+        id: string;
+        debate_id: string;
+        user_id: string;
+        side: 'pro' | 'con';
+        turn_number: number;
+        content: string;
+        created_at: string;
+      };
+      nextTurn: 'pro' | 'con';
+      nextTurnNumber: number;
+    }>(`/api/debates/${debateId}/message`, {
       method: 'POST',
       body: { content },
       requireAuth: true,

@@ -102,7 +102,7 @@ export function DebateRoomPage() {
   const tickerInitializedRef = useRef(false);
   const tickerTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const progressInFlightRef = useRef(false);
-  const progressBoundaryRef = useRef<string | null>(null);
+  const lastProgressRequestAtRef = useRef(0);
   const presenceSyncedRef = useRef(false);
 
   const mySide = snapshot?.role === 'pro' || snapshot?.role === 'con' ? snapshot.role : null;
@@ -376,7 +376,6 @@ export function DebateRoomPage() {
 
   useEffect(() => {
     if (!debateId || !snapshot || snapshot.status !== 'in_progress') {
-      progressBoundaryRef.current = null;
       return;
     }
 
@@ -384,24 +383,47 @@ export function DebateRoomPage() {
     const turnExpired = turnRemainingSec <= 0;
 
     if (!overallExpired && !turnExpired) {
-      progressBoundaryRef.current = null;
-      return;
-    }
-
-    const boundaryKey = `${snapshot.status}:${snapshot.turn.current ?? 'none'}:${snapshot.turn.number}:${overallExpired ? 'O' : '-'}:${turnExpired ? 'T' : '-'}`;
-    if (progressBoundaryRef.current === boundaryKey) {
       return;
     }
     if (progressInFlightRef.current) {
       return;
     }
 
-    progressBoundaryRef.current = boundaryKey;
+    const now = Date.now();
+    if (now - lastProgressRequestAtRef.current < 900) {
+      return;
+    }
+
+    lastProgressRequestAtRef.current = now;
     progressInFlightRef.current = true;
 
-    void debateApi.progress(debateId).finally(() => {
-      progressInFlightRef.current = false;
-    });
+    void debateApi.progress(debateId)
+      .then((progressed) => {
+        setSnapshot((prev) => {
+          if (!prev) return prev;
+          const turnChanged =
+            prev.turn.current !== progressed.currentTurn
+            || prev.turn.number !== progressed.turnNumber;
+
+          return {
+            ...prev,
+            status: progressed.status,
+            turn: {
+              current: progressed.currentTurn,
+              number: progressed.turnNumber,
+            },
+            result: progressed.result ?? prev.result,
+            timing: {
+              ...prev.timing,
+              turnStartedAt: turnChanged ? new Date().toISOString() : prev.timing.turnStartedAt,
+              serverNow: new Date().toISOString(),
+            },
+          };
+        });
+      })
+      .finally(() => {
+        progressInFlightRef.current = false;
+      });
   }, [debateId, snapshot, overallRemainingSec, turnRemainingSec]);
 
   useEffect(() => {
@@ -627,9 +649,64 @@ export function DebateRoomPage() {
 
     setIsSubmittingMessage(true);
     try {
-      await debateApi.sendMessage(debateId, content);
+      const sent = await debateApi.sendMessage(debateId, content);
+
+      setSnapshot((prev) => {
+        if (!prev) return prev;
+        if (prev.messages.some((message) => message.id === sent.message.id)) {
+          return {
+            ...prev,
+            turn: {
+              current: sent.nextTurn,
+              number: sent.nextTurnNumber,
+            },
+            timing: {
+              ...prev.timing,
+              turnStartedAt: new Date().toISOString(),
+              serverNow: new Date().toISOString(),
+            },
+          };
+        }
+
+        const senderDisplayName = sent.message.side === 'pro'
+          ? prev.participants.pro.displayName
+          : prev.participants.con.displayName;
+        const senderAvatarUrl = sent.message.side === 'pro'
+          ? prev.participants.pro.avatarUrl
+          : prev.participants.con.avatarUrl;
+
+        return {
+          ...prev,
+          messages: [
+            ...prev.messages,
+            {
+              id: sent.message.id,
+              side: sent.message.side,
+              turnNumber: sent.message.turn_number,
+              content: sent.message.content,
+              createdAt: sent.message.created_at,
+              user: {
+                id: sent.message.user_id,
+                displayName: senderDisplayName,
+                avatarUrl: senderAvatarUrl,
+              },
+            },
+          ],
+          turn: {
+            current: sent.nextTurn,
+            number: sent.nextTurnNumber,
+          },
+          timing: {
+            ...prev.timing,
+            turnStartedAt: new Date().toISOString(),
+            serverNow: new Date().toISOString(),
+          },
+        };
+      });
+
       setMessageInput('');
       setFlash(null);
+      void refreshSnapshot();
     } catch (sendError) {
       const message = sendError instanceof Error ? sendError.message : '発言の送信に失敗しました';
       setFlash({ type: 'error', text: message });
