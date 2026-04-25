@@ -127,12 +127,30 @@ export function DebateRoomPage() {
       isDebater &&
       (snapshot.canStartDebate || snapshot.status === 'waiting' || snapshot.status === 'matching')
   );
+  const startOverlayStorageKey = useMemo(
+    () => (debateId ? `debate-start-overlay-dismissed:${debateId}` : null),
+    [debateId]
+  );
   const shouldWarnBeforeLeave = Boolean(
     snapshot
       && isDebater
       && snapshot.status !== 'finished'
       && snapshot.status !== 'cancelled'
   );
+
+  const setStartOverlayState = useCallback((dismissed: boolean) => {
+    setStartOverlayDismissed(dismissed);
+    if (!startOverlayStorageKey) return;
+    try {
+      if (dismissed) {
+        window.sessionStorage.setItem(startOverlayStorageKey, '1');
+      } else {
+        window.sessionStorage.removeItem(startOverlayStorageKey);
+      }
+    } catch {
+      // sessionStorageが使えない環境ではstateのみ利用
+    }
+  }, [startOverlayStorageKey]);
 
   const confirmLeaveDebate = useCallback(() => {
     if (!shouldWarnBeforeLeave) return true;
@@ -274,7 +292,6 @@ export function DebateRoomPage() {
 
   useEffect(() => {
     setActiveTickers([]);
-    setStartOverlayDismissed(false);
     lastTickerCommentIdRef.current = null;
     tickerInitializedRef.current = false;
 
@@ -282,6 +299,19 @@ export function DebateRoomPage() {
     Object.values(timers).forEach((timer) => clearTimeout(timer));
     tickerTimersRef.current = {};
   }, [debateId]);
+
+  useEffect(() => {
+    if (!startOverlayStorageKey) {
+      setStartOverlayDismissed(false);
+      return;
+    }
+    try {
+      const saved = window.sessionStorage.getItem(startOverlayStorageKey);
+      setStartOverlayDismissed(saved === '1');
+    } catch {
+      setStartOverlayDismissed(false);
+    }
+  }, [startOverlayStorageKey]);
 
   useEffect(() => {
     return () => {
@@ -340,9 +370,9 @@ export function DebateRoomPage() {
   useEffect(() => {
     if (!snapshot) return;
     if (snapshot.status !== 'waiting' && snapshot.status !== 'matching') {
-      setStartOverlayDismissed(true);
+      setStartOverlayState(true);
     }
-  }, [snapshot]);
+  }, [setStartOverlayState, snapshot]);
 
   useEffect(() => {
     if (!debateId || !snapshot || snapshot.status !== 'in_progress') {
@@ -694,9 +724,9 @@ export function DebateRoomPage() {
     if (!debateId || !canStartDebate || isStartingDebate) return;
 
     setIsStartingDebate(true);
+    setStartOverlayState(true);
     try {
       const started = await debateApi.startDebate(debateId);
-      setStartOverlayDismissed(true);
 
       setSnapshot((prev) => {
         if (!prev) return prev;
@@ -722,6 +752,7 @@ export function DebateRoomPage() {
       setFlash({ type: 'info', text: 'ディベートを開始しました' });
       setTimeout(() => setFlash(null), 1500);
     } catch (startError) {
+      setStartOverlayState(false);
       const message = startError instanceof Error ? startError.message : 'ディベート開始に失敗しました';
       setFlash({ type: 'error', text: message });
     } finally {
