@@ -52,11 +52,26 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
     Object.assign(headers, customHeaders);
   }
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), 15000);
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}${endpoint}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new ApiError('通信が混み合っています。時間をおいて再試行してください', 504, 'REQUEST_TIMEOUT');
+    }
+
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+  }
 
   const retryAfterHeader = response.headers.get('Retry-After');
   const retryAfterSec = retryAfterHeader ? Number(retryAfterHeader) : undefined;

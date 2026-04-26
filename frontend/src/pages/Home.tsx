@@ -76,6 +76,9 @@ export function HomePage() {
     liveCards: [],
     archivedCards: [],
   });
+  const inFlightFetchRef = useRef<Promise<void> | null>(null);
+  const queuedFetchRef = useRef(false);
+  const scheduledRefreshRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
 
   const liveSentinelRef = useRef<HTMLDivElement | null>(null);
 
@@ -154,21 +157,51 @@ export function HomePage() {
   }, [timerManager]);
 
   const fetchCards = useCallback(async () => {
+    if (inFlightFetchRef.current) {
+      queuedFetchRef.current = true;
+      await inFlightFetchRef.current;
+      return;
+    }
+
+    const run = async () => {
+      try {
+        const data = await homeApi.getCards();
+        applyPayload(data);
+        setError(null);
+      } catch (fetchError) {
+        reportClientError(fetchError, {
+          area: 'home',
+          action: 'fetch_cards',
+        });
+        const message = fetchError instanceof Error ? fetchError.message : 'ホームデータの取得に失敗しました';
+        setError(message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    inFlightFetchRef.current = run();
     try {
-      const data = await homeApi.getCards();
-      applyPayload(data);
-      setError(null);
-    } catch (fetchError) {
-      reportClientError(fetchError, {
-        area: 'home',
-        action: 'fetch_cards',
-      });
-      const message = fetchError instanceof Error ? fetchError.message : 'ホームデータの取得に失敗しました';
-      setError(message);
+      await inFlightFetchRef.current;
     } finally {
-      setLoading(false);
+      inFlightFetchRef.current = null;
+      if (queuedFetchRef.current) {
+        queuedFetchRef.current = false;
+        void fetchCards();
+      }
     }
   }, [applyPayload]);
+
+  const scheduleCardsRefresh = useCallback((delayMs = 150) => {
+    if (scheduledRefreshRef.current) {
+      return;
+    }
+
+    scheduledRefreshRef.current = timerManager.setManagedTimeout(() => {
+      scheduledRefreshRef.current = null;
+      void fetchCards();
+    }, delayMs);
+  }, [fetchCards, timerManager]);
 
   const refreshAfterReconnect = useCallback(async () => {
     await fetchCards();
@@ -176,6 +209,11 @@ export function HomePage() {
   }, [fetchCards]);
 
   const teardownRealtime = useCallback(() => {
+    if (scheduledRefreshRef.current) {
+      timerManager.clearManagedTimeout(scheduledRefreshRef.current);
+      scheduledRefreshRef.current = null;
+    }
+
     if (reconnectTimerRef.current) {
       timerManager.clearManagedTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
@@ -216,7 +254,7 @@ export function HomePage() {
           cardsRef.current.liveCards.some((card) => card.debateId === debateId)
           || cardsRef.current.archivedCards.some((card) => card.debateId === debateId);
         if (!knownDebate && (row.status === 'in_progress' || row.status === 'voting' || row.status === 'waiting')) {
-          void fetchCards();
+          scheduleCardsRefresh();
           return;
         }
 
@@ -306,7 +344,7 @@ export function HomePage() {
           cardsRef.current.liveCards.some((card) => card.debateId === debateId)
           || cardsRef.current.archivedCards.some((card) => card.debateId === debateId);
         if (!knownDebate && row.is_hidden !== true) {
-          void fetchCards();
+          scheduleCardsRefresh();
           return;
         }
 
@@ -380,7 +418,7 @@ export function HomePage() {
       });
 
     channelRef.current = channel;
-  }, [fetchCards, refreshAfterReconnect, teardownRealtime, timerManager]);
+  }, [refreshAfterReconnect, scheduleCardsRefresh, teardownRealtime, timerManager]);
 
   const unlockCard = useCallback((debateId: string) => {
     lockedCardIdsRef.current.delete(debateId);
