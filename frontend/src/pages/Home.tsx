@@ -68,6 +68,7 @@ export function HomePage() {
   const channelRef = useRef<ReturnType<NonNullable<typeof supabaseRealtime>['channel']> | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   const reconnectAttemptRef = useRef(0);
+  const activeChannelIdRef = useRef<string | null>(null);
   const lockedCardIdsRef = useRef<Set<string>>(new Set());
   const pendingPayloadRef = useRef<HomeCardsResponse | null>(null);
   const latestPayloadRef = useRef<HomeCardsResponse | null>(null);
@@ -220,8 +221,10 @@ export function HomePage() {
     }
 
     if (channelRef.current && supabaseRealtime) {
-      supabaseRealtime.removeChannel(channelRef.current);
+      const channel = channelRef.current;
       channelRef.current = null;
+      activeChannelIdRef.current = null;
+      supabaseRealtime.removeChannel(channel);
     }
   }, [timerManager]);
 
@@ -234,6 +237,7 @@ export function HomePage() {
       typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
         ? crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    activeChannelIdRef.current = channelId;
 
     const channel = supabaseRealtime
       .channel(`home-live-feed-${channelId}`)
@@ -395,8 +399,13 @@ export function HomePage() {
         });
       })
       .subscribe(async (status) => {
+        if (activeChannelIdRef.current !== channelId) {
+          return;
+        }
+
         if (status === 'SUBSCRIBED') {
           reconnectAttemptRef.current = 0;
+          setDisconnected(false);
           await refreshAfterReconnect();
           return;
         }
