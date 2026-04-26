@@ -1,33 +1,15 @@
-// ユーザー関連
-export type UserRole = 'user' | 'admin';
-export type UserRank =
-  | 'bronze'
-  | 'silver'
-  | 'gold'
-  | 'platinum'
-  | 'diamond'
-  | 'master'
-  | 'grandmaster'
-  | 'champion'
-  | 'legend'
-  | 'mythic';
+import type {
+  DebateSide,
+  DebateStatus,
+  SharedUser,
+  UserRank,
+  UserRole,
+} from '../../../packages/shared/src/index';
 
-export interface User {
-  id: string;
-  firebaseUid: string;
-  displayName: string;
-  avatarUrl?: string;
-  role: UserRole;
-  rank: UserRank;
-  points: number;
-  totalDebates: number;
-  wins: number;
-  losses: number;
-  draws: number;
-  isBanned: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
+// ユーザー関連
+export type { UserRole, UserRank, DebateStatus, DebateSide };
+
+export interface User extends SharedUser {}
 
 // 認証関連
 export interface RegisterInput {
@@ -54,8 +36,6 @@ export interface ApiError {
 }
 
 // ディベート関連
-export type DebateStatus = 'waiting' | 'matching' | 'in_progress' | 'voting' | 'finished' | 'cancelled';
-export type DebateSide = 'pro' | 'con';
 export type DebateResult = 'pro_win' | 'con_win' | 'draw' | 'cancelled';
 
 export interface Topic {

@@ -1,5 +1,10 @@
-type DebateStatus = 'waiting' | 'matching' | 'in_progress' | 'voting' | 'finished' | 'cancelled';
-type DebateSide = 'pro' | 'con' | null;
+import type {
+  DebateSide as SharedDebateSide,
+  DebateStatus,
+} from '../../../packages/shared/src/index';
+import { reportWorkerError } from '../lib/monitoring';
+
+type DebateSide = SharedDebateSide | null;
 type RealtimeTicketRole = 'authenticated' | 'guest';
 
 type RealtimeTicketPayload = {
@@ -52,6 +57,8 @@ const STORAGE_KEY = 'realtime:snapshot';
 const USED_WS_TICKET_PREFIX = 'realtime:used-ticket:';
 const MAX_IAT_FUTURE_SKEW_SEC = 30;
 const MAX_TICKET_LIFETIME_SEC = 120;
+const HEARTBEAT_INTERVAL_MS = 25_000;
+const SOCKET_STALE_MS = 75_000;
 
 export class DebateRoom {
   private readonly state: DurableObjectState;
@@ -59,6 +66,7 @@ export class DebateRoom {
   private readonly sockets = new Map<WebSocket, ClientMeta>();
   private snapshot: RealtimeSnapshot | null = null;
   private readonly boot: Promise<void>;
+  private heartbeatTimer: ReturnType<typeof globalThis.setInterval> | null = null;
 
   constructor(state: DurableObjectState, env: DebateRoomEnv) {
     this.state = state;
@@ -107,8 +115,18 @@ export class DebateRoom {
   }
 
   private async initialize(): Promise<void> {
+    // Fail fast so missing secret is visible during deployment, not at runtime.
+    this.requireInternalSecret();
     const persisted = await this.state.storage.get<RealtimeSnapshot>(STORAGE_KEY);
     this.snapshot = persisted ?? this.buildInitialSnapshot();
+  }
+
+  private requireInternalSecret(): string {
+    const secret = this.env.INTERNAL_SECRET;
+    if (!secret || secret.length < 32) {
+      throw new Error('DebateRoom requires INTERNAL_SECRET (min length: 32)');
+    }
+    return secret;
   }
 
   private ensureSnapshot(): RealtimeSnapshot {
@@ -157,9 +175,7 @@ export class DebateRoom {
   }
 
   private async verifyRealtimeTicket(ticket: string): Promise<RealtimeTicketPayload | null> {
-    if (!this.env.INTERNAL_SECRET || this.env.INTERNAL_SECRET.length < 32) {
-      return null;
-    }
+    const internalSecret = this.requireInternalSecret();
 
     const parts = ticket.split('.');
     if (parts.length !== 2) {
@@ -174,13 +190,17 @@ export class DebateRoom {
       signature = this.base64UrlToBytes(signatureB64);
       const payloadJson = new TextDecoder().decode(this.base64UrlToBytes(payloadB64));
       payload = JSON.parse(payloadJson) as RealtimeTicketPayload;
-    } catch {
+    } catch (error) {
+      reportWorkerError(error, {
+        area: 'debate_room_do',
+        action: 'decode_realtime_ticket',
+      });
       return null;
     }
 
     const key = await crypto.subtle.importKey(
       'raw',
-      new TextEncoder().encode(this.env.INTERNAL_SECRET),
+      new TextEncoder().encode(internalSecret),
       { name: 'HMAC', hash: 'SHA-256' },
       false,
       ['verify']
@@ -246,13 +266,51 @@ export class DebateRoom {
   }
 
   private authorizeInternalRequest(request: Request): boolean {
-    const configured = this.env.INTERNAL_SECRET;
-    if (!configured || configured.length < 32) {
-      return false;
-    }
+    const configured = this.requireInternalSecret();
 
     const provided = request.headers.get('x-internal-secret');
     return provided === configured;
+  }
+
+  private startHeartbeat(): void {
+    if (this.heartbeatTimer) return;
+
+    this.heartbeatTimer = globalThis.setInterval(() => {
+      const now = Date.now();
+      for (const [socket, meta] of this.sockets.entries()) {
+        if (now - meta.lastSeenAt > SOCKET_STALE_MS) {
+          try {
+            socket.close(1001, 'Heartbeat timeout');
+          } catch (error) {
+            reportWorkerError(error, {
+              area: 'debate_room_do',
+              action: 'close_stale_socket',
+              extras: { clientId: meta.id },
+            });
+          }
+          this.removeSocket(socket);
+          continue;
+        }
+
+        try {
+          socket.send(JSON.stringify({ type: 'heartbeat', ts: now }));
+        } catch (error) {
+          reportWorkerError(error, {
+            area: 'debate_room_do',
+            action: 'send_heartbeat',
+            extras: { clientId: meta.id },
+          });
+          this.removeSocket(socket);
+        }
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  private stopHeartbeatIfIdle(): void {
+    if (this.sockets.size > 0) return;
+    if (!this.heartbeatTimer) return;
+    globalThis.clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = null;
   }
 
   private async handleConnect(request: Request, url: URL): Promise<Response> {
@@ -261,9 +319,7 @@ export class DebateRoom {
       return this.jsonResponse({ error: 'Expected websocket upgrade' }, 426);
     }
 
-    if (!this.env.INTERNAL_SECRET || this.env.INTERNAL_SECRET.length < 32) {
-      return this.jsonResponse({ error: 'Realtime security is not configured' }, 500);
-    }
+    this.requireInternalSecret();
 
     const debateIdFromQuery = url.searchParams.get('debateId');
     const rawTicket = url.searchParams.get('ticket') ?? '';
@@ -302,6 +358,7 @@ export class DebateRoom {
 
     server.accept();
     this.sockets.set(server, meta);
+    this.startHeartbeat();
 
     server.addEventListener('message', (event) => {
       void this.handleClientMessage(server, event.data);
@@ -353,7 +410,11 @@ export class DebateRoom {
     let payload: { type?: string } | null = null;
     try {
       payload = JSON.parse(text) as { type?: string };
-    } catch {
+    } catch (error) {
+      reportWorkerError(error, {
+        area: 'debate_room_do',
+        action: 'parse_client_message',
+      });
       socket.send(JSON.stringify({ type: 'error', message: 'Invalid JSON payload' }));
       return;
     }
@@ -365,6 +426,11 @@ export class DebateRoom {
 
     if (payload.type === 'ping') {
       socket.send(JSON.stringify({ type: 'pong', ts: Date.now() }));
+      return;
+    }
+
+    if (payload.type === 'pong' || payload.type === 'heartbeat') {
+      meta.lastSeenAt = Date.now();
       return;
     }
 
@@ -389,7 +455,11 @@ export class DebateRoom {
     let event: RealtimeEvent;
     try {
       event = await request.json<RealtimeEvent>();
-    } catch {
+    } catch (error) {
+      reportWorkerError(error, {
+        area: 'debate_room_do',
+        action: 'parse_internal_event',
+      });
       return this.jsonResponse({ error: 'Invalid JSON body' }, 400);
     }
 
@@ -427,6 +497,7 @@ export class DebateRoom {
 
   private removeSocket(socket: WebSocket): void {
     this.sockets.delete(socket);
+    this.stopHeartbeatIfIdle();
     this.broadcast({ type: 'presence:update', viewers: this.sockets.size });
   }
 
@@ -435,7 +506,11 @@ export class DebateRoom {
     for (const socket of this.sockets.keys()) {
       try {
         socket.send(message);
-      } catch {
+      } catch (error) {
+        reportWorkerError(error, {
+          area: 'debate_room_do',
+          action: 'broadcast',
+        });
         this.removeSocket(socket);
       }
     }

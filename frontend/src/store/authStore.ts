@@ -10,6 +10,7 @@ import {
   type FirebaseUser,
 } from '../lib/firebase';
 import { authApi, ApiError } from '../lib/api';
+import { reportClientError } from '../lib/monitoring';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -70,6 +71,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
               isInitialized: true,
             });
           } catch (error) {
+            reportClientError(error, {
+              area: 'auth_store',
+              action: 'initialize_get_me',
+            });
             // ユーザーがまだSupabaseに登録されていない場合
             if (error instanceof ApiError && error.statusCode === 404) {
               set({ user: null, isLoading: false, isInitialized: true });
@@ -149,6 +154,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         }
       }
     } catch (error) {
+      reportClientError(error, {
+        area: 'auth_store',
+        action: 'login_with_email',
+        extras: { email },
+      });
       // ログイン失敗を記録（Firebaseエラーの場合）
       if (error instanceof Error && error.message.includes('auth/')) {
         try {
@@ -157,8 +167,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             set({ isLoading: false, error: 'ログイン試行回数の上限に達しました。1分間お待ちください。' });
             return;
           }
-        } catch {
-          // 記録失敗は無視
+        } catch (recordError) {
+          reportClientError(recordError, {
+            area: 'auth_store',
+            action: 'record_failed_login_attempt',
+            extras: { email },
+          });
         }
       }
 
@@ -220,6 +234,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         throw error;
       }
     } catch (error) {
+      reportClientError(error, {
+        area: 'auth_store',
+        action: 'login_with_google',
+      });
       const message = error instanceof Error ? error.message : 'Googleログインに失敗しました';
       set({ isLoading: false, error: message });
       throw error;
@@ -232,6 +250,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const firebaseUser = await registerWithEmail(email, password);
       set({ firebaseUser, isLoading: false });
     } catch (error) {
+      reportClientError(error, {
+        area: 'auth_store',
+        action: 'register_with_email',
+        extras: { email },
+      });
       const message = error instanceof Error ? error.message : '登録に失敗しました';
       set({ isLoading: false, error: message });
       throw error;
@@ -283,6 +306,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       set({ isLoading: false });
     } catch (error) {
+      reportClientError(error, {
+        area: 'auth_store',
+        action: 'register_user_profile',
+      });
       const message = error instanceof Error ? error.message : '登録に失敗しました';
       set({ isLoading: false, error: message });
       throw error;
@@ -295,6 +322,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       await firebaseLogout();
       set({ user: null, firebaseUser: null, isLoading: false });
     } catch (error) {
+      reportClientError(error, {
+        area: 'auth_store',
+        action: 'logout',
+      });
       set({ isLoading: false });
       throw error;
     }
@@ -304,6 +335,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       await resendVerificationEmail();
     } catch (error) {
+      reportClientError(error, {
+        area: 'auth_store',
+        action: 'resend_verification',
+      });
       const message = error instanceof Error ? error.message : '確認メールの送信に失敗しました';
       set({ error: message });
       throw error;
@@ -334,8 +369,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           updatedAt: userData.createdAt,
         },
       });
-    } catch {
-      // エラーは無視
+    } catch (error) {
+      reportClientError(error, {
+        area: 'auth_store',
+        action: 'refresh_user',
+      });
+      set({ error: 'ユーザー情報の更新に失敗しました' });
     }
   },
 

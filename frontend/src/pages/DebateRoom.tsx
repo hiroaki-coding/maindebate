@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Button } from '../components/common';
 import { ApiError, debateApi, type DebateSnapshot } from '../lib/api';
+import { reportClientError } from '../lib/monitoring';
 import { supabaseRealtime } from '../lib/supabase';
 import { useAuthStore } from '../store/authStore';
+import { useTimerManager } from '../hooks/useTimerManager';
 
 type FlashMessage = { type: 'info' | 'error'; text: string } | null;
 type ReportReason = 'spam' | 'harassment' | 'discrimination' | 'other';
@@ -73,6 +75,7 @@ export function DebateRoomPage() {
   const { debateId } = useParams<{ debateId: string }>();
   const navigate = useNavigate();
   const { user } = useAuthStore();
+  const timerManager = useTimerManager();
 
   const [snapshot, setSnapshot] = useState<DebateSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -100,7 +103,7 @@ export function DebateRoomPage() {
   const commentScrollRef = useRef<HTMLDivElement | null>(null);
   const lastTickerCommentIdRef = useRef<string | null>(null);
   const tickerInitializedRef = useRef(false);
-  const tickerTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const tickerTimersRef = useRef<Record<string, ReturnType<typeof globalThis.setTimeout>>>({});
   const progressInFlightRef = useRef(false);
   const lastProgressRequestAtRef = useRef(0);
   const presenceSyncedRef = useRef(false);
@@ -147,10 +150,14 @@ export function DebateRoomPage() {
       } else {
         window.sessionStorage.removeItem(startOverlayStorageKey);
       }
-    } catch {
-      // sessionStorageが使えない環境ではstateのみ利用
+    } catch (error) {
+      reportClientError(error, {
+        area: 'debate_room',
+        action: 'persist_start_overlay_state',
+        extras: { debateId, dismissed },
+      });
     }
-  }, [startOverlayStorageKey]);
+  }, [debateId, startOverlayStorageKey]);
 
   const confirmLeaveDebate = useCallback(() => {
     if (!shouldWarnBeforeLeave) return true;
@@ -164,11 +171,11 @@ export function DebateRoomPage() {
 
   useEffect(() => {
     if (retryAfterSec <= 0) return;
-    const id = setInterval(() => {
+    const id = timerManager.setManagedInterval(() => {
       setRetryAfterSec((prev) => Math.max(0, prev - 1));
     }, 1000);
-    return () => clearInterval(id);
-  }, [retryAfterSec]);
+    return () => timerManager.clearManagedInterval(id);
+  }, [retryAfterSec, timerManager]);
 
   const refreshSnapshot = useCallback(async () => {
     if (!debateId) return;
@@ -178,6 +185,11 @@ export function DebateRoomPage() {
       setSnapshot(data);
       setError(null);
     } catch (fetchError) {
+      reportClientError(fetchError, {
+        area: 'debate_room',
+        action: 'fetch_snapshot',
+        extras: { debateId },
+      });
       const message = fetchError instanceof Error ? fetchError.message : 'ディベート情報の取得に失敗しました';
       setError(message);
     } finally {
@@ -196,13 +208,13 @@ export function DebateRoomPage() {
       if (prevTurn === currentTurn) return;
 
       setFlash({ type: 'info', text: 'あなたのターンです' });
-      setTimeout(() => setFlash(null), 1500);
+      timerManager.setManagedTimeout(() => setFlash(null), 1500);
 
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
         navigator.vibrate(100);
       }
     },
-    [mySide]
+    [mySide, timerManager]
   );
 
   useEffect(() => {
@@ -246,12 +258,12 @@ export function DebateRoomPage() {
   }, [confirmLeaveDebate, navigate, shouldWarnBeforeLeave]);
 
   useEffect(() => {
-    const id = setInterval(() => {
+    const id = timerManager.setManagedInterval(() => {
       setNowMs(Date.now());
     }, 1000);
 
-    return () => clearInterval(id);
-  }, []);
+    return () => timerManager.clearManagedInterval(id);
+  }, [timerManager]);
 
   useEffect(() => {
     if (!snapshot) return;
@@ -296,9 +308,9 @@ export function DebateRoomPage() {
     tickerInitializedRef.current = false;
 
     const timers = tickerTimersRef.current;
-    Object.values(timers).forEach((timer) => clearTimeout(timer));
+    Object.values(timers).forEach((timer) => timerManager.clearManagedTimeout(timer));
     tickerTimersRef.current = {};
-  }, [debateId]);
+  }, [debateId, timerManager]);
 
   useEffect(() => {
     if (!startOverlayStorageKey) {
@@ -308,18 +320,23 @@ export function DebateRoomPage() {
     try {
       const saved = window.sessionStorage.getItem(startOverlayStorageKey);
       setStartOverlayDismissed(saved === '1');
-    } catch {
+    } catch (error) {
+      reportClientError(error, {
+        area: 'debate_room',
+        action: 'read_start_overlay_state',
+        extras: { debateId },
+      });
       setStartOverlayDismissed(false);
     }
-  }, [startOverlayStorageKey]);
+  }, [debateId, startOverlayStorageKey]);
 
   useEffect(() => {
     return () => {
       const timers = tickerTimersRef.current;
-      Object.values(timers).forEach((timer) => clearTimeout(timer));
+      Object.values(timers).forEach((timer) => timerManager.clearManagedTimeout(timer));
       tickerTimersRef.current = {};
     };
-  }, []);
+  }, [timerManager]);
 
   useEffect(() => {
     if (!snapshot) return;
@@ -342,13 +359,13 @@ export function DebateRoomPage() {
 
     setActiveTickers((prev) => [...prev, { id: tickerId, text, durationMs }].slice(-4));
 
-    const timer = setTimeout(() => {
+    const timer = timerManager.setManagedTimeout(() => {
       setActiveTickers((prev) => prev.filter((item) => item.id !== tickerId));
       delete tickerTimersRef.current[tickerId];
     }, durationMs + 250);
 
     tickerTimersRef.current[tickerId] = timer;
-  }, [snapshot]);
+  }, [snapshot, timerManager]);
 
   useEffect(() => {
     refreshSnapshot();
@@ -419,6 +436,13 @@ export function DebateRoomPage() {
               serverNow: new Date().toISOString(),
             },
           };
+        });
+      })
+      .catch((error) => {
+        reportClientError(error, {
+          area: 'debate_room',
+          action: 'advance_progress',
+          extras: { debateId },
         });
       })
       .finally(() => {
@@ -612,8 +636,12 @@ export function DebateRoomPage() {
           try {
             const parsed = JSON.parse(row.ai_judgment) as DebateSnapshot['result'];
             setSnapshot((prev) => (prev ? { ...prev, result: parsed } : prev));
-          } catch {
-            // 判定JSONが壊れている場合は無視
+          } catch (error) {
+            reportClientError(error, {
+              area: 'debate_room',
+              action: 'parse_ai_judgment',
+              extras: { debateId },
+            });
           }
         }
       )
@@ -706,8 +734,12 @@ export function DebateRoomPage() {
 
       setMessageInput('');
       setFlash(null);
-      void refreshSnapshot();
     } catch (sendError) {
+      reportClientError(sendError, {
+        area: 'debate_room',
+        action: 'send_message',
+        extras: { debateId },
+      });
       const message = sendError instanceof Error ? sendError.message : '発言の送信に失敗しました';
       setFlash({ type: 'error', text: message });
     } finally {
@@ -774,6 +806,11 @@ export function DebateRoomPage() {
         };
       });
     } catch (voteError) {
+      reportClientError(voteError, {
+        area: 'debate_room',
+        action: 'vote',
+        extras: { debateId, side },
+      });
       setSnapshot((prev) => {
         if (!prev) return prev;
         const total = prevPro + prevCon;
@@ -827,8 +864,13 @@ export function DebateRoomPage() {
       void refreshSnapshot();
 
       setFlash({ type: 'info', text: 'ディベートを開始しました' });
-      setTimeout(() => setFlash(null), 1500);
+      timerManager.setManagedTimeout(() => setFlash(null), 1500);
     } catch (startError) {
+      reportClientError(startError, {
+        area: 'debate_room',
+        action: 'start_debate',
+        extras: { debateId },
+      });
       setStartOverlayState(false);
       const message = startError instanceof Error ? startError.message : 'ディベート開始に失敗しました';
       setFlash({ type: 'error', text: message });
@@ -874,6 +916,11 @@ export function DebateRoomPage() {
         };
       });
     } catch (commentError) {
+      reportClientError(commentError, {
+        area: 'debate_room',
+        action: 'send_comment',
+        extras: { debateId },
+      });
       if (commentError instanceof ApiError && commentError.statusCode === 429 && typeof commentError.retryAfterSec === 'number') {
         setRetryAfterSec(commentError.retryAfterSec);
       }
@@ -900,8 +947,13 @@ export function DebateRoomPage() {
       });
       setReportDialogOpen(false);
       setFlash({ type: 'info', text: '通報を受け付けました' });
-      setTimeout(() => setFlash(null), 1500);
+      timerManager.setManagedTimeout(() => setFlash(null), 1500);
     } catch (reportError) {
+      reportClientError(reportError, {
+        area: 'debate_room',
+        action: 'report_debate',
+        extras: { debateId, reportReason },
+      });
       if (reportError instanceof ApiError && reportError.statusCode === 429 && typeof reportError.retryAfterSec === 'number') {
         setRetryAfterSec(reportError.retryAfterSec);
       }

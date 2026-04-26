@@ -9,6 +9,7 @@ import { debateRoutes, runDebateProgressSweep } from './routes/debates';
 import { homeRoutes } from './routes/home';
 import { adminRoutes } from './routes/admin';
 import { userRoutes } from './routes/users';
+import { reportWorkerError } from './lib/monitoring';
 
 export { DebateRoom } from './durable-objects/DebateRoom';
 
@@ -53,6 +54,17 @@ app.route('/api/users', userRoutes);
 app.notFound((c) => {
   addCorsToResponse(c);
 
+  const env = c.env;
+  const isProduction = env.ENVIRONMENT === 'production' || env.NODE_ENV === 'production';
+
+  // Hide route topology in production to reduce endpoint discovery surface.
+  if (isProduction) {
+    return new Response('Not Found', {
+      status: 404,
+      headers: c.res.headers,
+    });
+  }
+
   const requestedPath = c.req.path;
   const method = c.req.method;
 
@@ -61,59 +73,26 @@ app.notFound((c) => {
     path: requestedPath,
     method: method,
     message: `Endpoint ${method} ${requestedPath} does not exist`,
-    availableEndpoints: [
-      'GET /health',
-      'POST /api/auth/register',
-      'GET /api/auth/me',
-      'POST /api/auth/check-ban',
-      'POST /api/auth/login-attempt',
-      'POST /api/auth/lock-status',
-      'POST /api/matching/join',
-      'GET /api/matching/status',
-      'POST /api/matching/cancel',
-      'GET /api/debates/:debateId/snapshot',
-      'POST /api/debates/:debateId/progress',
-      'POST /api/debates/:debateId/message',
-      'POST /api/debates/:debateId/vote',
-      'POST /api/debates/:debateId/comment',
-      'POST /api/debates/:debateId/comments/:commentId/report',
-      'POST /api/debates/:debateId/report',
-      'GET /api/home/cards',
-      'GET /api/home/search?q=keyword',
-      'GET /api/admin/guard',
-      'POST /api/admin/secure/login',
-      'GET /api/admin/secure/session',
-      'POST /api/admin/secure/logout',
-      'GET /api/admin/secure/dashboard',
-      'GET /api/admin/secure/users',
-      'POST /api/admin/secure/users/:userId/ban',
-      'POST /api/admin/secure/users/:userId/unban',
-      'POST /api/admin/secure/users/:userId/points',
-      'DELETE /api/admin/secure/users/:userId',
-      'GET /api/admin/secure/topics',
-      'POST /api/admin/secure/topics',
-      'PATCH /api/admin/secure/topics/:topicId',
-      'DELETE /api/admin/secure/topics/:topicId',
-      'GET /api/admin/secure/reports',
-      'POST /api/admin/secure/reports/:reportId/resolve',
-      'GET /api/admin/secure/rank-settings',
-      'PATCH /api/admin/secure/rank-settings',
-      'GET /api/admin/secure/logs',
-      'GET /api/users/leaderboard',
-      'GET /api/users/:userId',
-      'PATCH /api/users/me/nickname',
-      'GET /api/users/me/notifications'
-    ]
+    hint: 'Check route definitions for development diagnostics',
   }, 404);
 });
 
 // すべての未処理エラーをキャッチ
 app.onError((err, c) => {
-  console.error('Unhandled error:', err);
+  reportWorkerError(err, {
+    area: 'worker',
+    action: 'unhandled_error',
+    extras: {
+      method: c.req.method,
+      path: c.req.path,
+    },
+  });
   addCorsToResponse(c);
   return c.json({
     error: 'Internal Server Error',
-    message: err.message || 'An unexpected error occurred'
+    message: c.env.ENVIRONMENT === 'production' || c.env.NODE_ENV === 'production'
+      ? 'An unexpected error occurred'
+      : (err.message || 'An unexpected error occurred')
   }, 500);
 });
 
@@ -123,9 +102,15 @@ const worker: ExportedHandler<Env> = {
     ctx.waitUntil((async () => {
       try {
         const result = await runDebateProgressSweep(env);
-        console.log('[cron] debate progress sweep', result);
+        const isProduction = env.ENVIRONMENT === 'production' || env.NODE_ENV === 'production';
+        if (!isProduction) {
+          console.info('[cron] debate progress sweep', result);
+        }
       } catch (error) {
-        console.error('[cron] debate progress sweep failed', error);
+        reportWorkerError(error, {
+          area: 'worker',
+          action: 'debate_progress_sweep',
+        });
       }
     })());
   },

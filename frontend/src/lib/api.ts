@@ -1,4 +1,5 @@
 import { getIdToken } from './firebase';
+import type { DebateSide, DebateStatus } from '../../../packages/shared/src/index';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8788';
 
@@ -179,7 +180,7 @@ export interface DebateSnapshot {
     proLabel: string;
     conLabel: string;
   };
-  status: 'waiting' | 'matching' | 'in_progress' | 'voting' | 'finished' | 'cancelled';
+  status: DebateStatus;
   role: DebateViewerRole;
   isDebater: boolean;
   isTurnOwner: boolean;
@@ -202,7 +203,7 @@ export interface DebateSnapshot {
     votingStartedAt: string | null;
   };
   turn: {
-    current: 'pro' | 'con' | null;
+    current: DebateSide | null;
     number: number;
   };
   participants: {
@@ -225,14 +226,14 @@ export interface DebateSnapshot {
     total: number;
     empty: boolean;
   };
-  myVote?: 'pro' | 'con' | null;
+  myVote?: DebateSide | null;
   metrics: {
     commentCount: number;
     viewerCount: number;
   };
   messages: Array<{
     id: string;
-    side: 'pro' | 'con';
+    side: DebateSide;
     turnNumber: number;
     content: string;
     createdAt: string;
@@ -285,7 +286,7 @@ export const debateApi = {
     request<{
       started: boolean;
       status: DebateSnapshot['status'];
-      currentTurn: 'pro' | 'con' | null;
+      currentTurn: DebateSide | null;
       turnNumber: number;
       startedAt: string | null;
       turnStartedAt: string | null;
@@ -297,7 +298,7 @@ export const debateApi = {
   progress: (debateId: string) =>
     request<{
       status: DebateSnapshot['status'];
-      currentTurn: 'pro' | 'con' | null;
+      currentTurn: DebateSide | null;
       turnNumber: number;
       result?: DebateSnapshot['result'];
     }>(`/api/debates/${debateId}/progress`, {
@@ -311,12 +312,12 @@ export const debateApi = {
         id: string;
         debate_id: string;
         user_id: string;
-        side: 'pro' | 'con';
+        side: DebateSide;
         turn_number: number;
         content: string;
         created_at: string;
       };
-      nextTurn: 'pro' | 'con';
+      nextTurn: DebateSide;
       nextTurnNumber: number;
     }>(`/api/debates/${debateId}/message`, {
       method: 'POST',

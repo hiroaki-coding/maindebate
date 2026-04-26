@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { homeApi, type HomeArchivedCard, type HomeCardsResponse, type HomeLiveCard } from '../lib/api';
+import { reportClientError } from '../lib/monitoring';
 import { supabaseRealtime } from '../lib/supabase';
 import { useAuthStore } from '../store/authStore';
 import { LiveBadge, LiveEmptyState } from '../components/common';
 import { AppNavigation } from '../components/layout';
+import { useTimerManager } from '../hooks/useTimerManager';
 
 type SearchSuggestion =
   | { type: 'topic'; id: string; label: string }
@@ -44,6 +46,7 @@ function clampHandle(name: string, max = 10): string {
 export function HomePage() {
   const navigate = useNavigate();
   const { user, logout } = useAuthStore();
+  const timerManager = useTimerManager();
 
   const [cards, setCards] = useState<HomeCardsResponse>({
     serverTime: new Date().toISOString(),
@@ -63,7 +66,7 @@ export function HomePage() {
   const [newLiveIds, setNewLiveIds] = useState<string[]>([]);
 
   const channelRef = useRef<ReturnType<NonNullable<typeof supabaseRealtime>['channel']> | null>(null);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   const reconnectAttemptRef = useRef(0);
   const lockedCardIdsRef = useRef<Set<string>>(new Set());
   const pendingPayloadRef = useRef<HomeCardsResponse | null>(null);
@@ -95,7 +98,7 @@ export function HomePage() {
 
     if (startedIds.length > 0) {
       setNewLiveIds((current) => Array.from(new Set([...current, ...startedIds])));
-      setTimeout(() => {
+      timerManager.setManagedTimeout(() => {
         setNewLiveIds((current) => current.filter((id) => !startedIds.includes(id)));
       }, 350);
     }
@@ -148,7 +151,7 @@ export function HomePage() {
       cardsRef.current = merged;
       return merged;
     });
-  }, []);
+  }, [timerManager]);
 
   const fetchCards = useCallback(async () => {
     try {
@@ -156,6 +159,10 @@ export function HomePage() {
       applyPayload(data);
       setError(null);
     } catch (fetchError) {
+      reportClientError(fetchError, {
+        area: 'home',
+        action: 'fetch_cards',
+      });
       const message = fetchError instanceof Error ? fetchError.message : 'ホームデータの取得に失敗しました';
       setError(message);
     } finally {
@@ -170,7 +177,7 @@ export function HomePage() {
 
   const teardownRealtime = useCallback(() => {
     if (reconnectTimerRef.current) {
-      clearTimeout(reconnectTimerRef.current);
+      timerManager.clearManagedTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
     }
 
@@ -178,7 +185,7 @@ export function HomePage() {
       supabaseRealtime.removeChannel(channelRef.current);
       channelRef.current = null;
     }
-  }, []);
+  }, [timerManager]);
 
   const startRealtime = useCallback(() => {
     if (!supabaseRealtime) return;
@@ -360,20 +367,20 @@ export function HomePage() {
           setDisconnected(true);
 
           if (reconnectTimerRef.current) {
-            clearTimeout(reconnectTimerRef.current);
+            timerManager.clearManagedTimeout(reconnectTimerRef.current);
           }
 
           const delaySec = Math.min(4, 2 ** reconnectAttemptRef.current);
           reconnectAttemptRef.current += 1;
 
-          reconnectTimerRef.current = setTimeout(() => {
+          reconnectTimerRef.current = timerManager.setManagedTimeout(() => {
             startRealtime();
           }, delaySec * 1000);
         }
       });
 
     channelRef.current = channel;
-  }, [fetchCards, refreshAfterReconnect, teardownRealtime]);
+  }, [fetchCards, refreshAfterReconnect, teardownRealtime, timerManager]);
 
   const unlockCard = useCallback((debateId: string) => {
     lockedCardIdsRef.current.delete(debateId);
@@ -406,12 +413,12 @@ export function HomePage() {
   }, [fetchCards, startRealtime, teardownRealtime]);
 
   useEffect(() => {
-    const id = setInterval(() => {
+    const id = timerManager.setManagedInterval(() => {
       setNowMs(Date.now());
     }, 1000);
 
-    return () => clearInterval(id);
-  }, []);
+    return () => timerManager.clearManagedInterval(id);
+  }, [timerManager]);
 
   useEffect(() => {
     if (!liveSentinelRef.current) return;
@@ -437,7 +444,7 @@ export function HomePage() {
     }
 
     setSearching(true);
-    const timer = setTimeout(async () => {
+    const timer = timerManager.setManagedTimeout(async () => {
       try {
         const result = await homeApi.search(searchQuery.trim());
         const merged: SearchSuggestion[] = [
@@ -445,24 +452,26 @@ export function HomePage() {
           ...result.users.map((row) => ({ type: 'user' as const, id: row.id, label: row.label, rank: row.rank })),
         ];
         setSuggestions(merged.slice(0, 8));
-      } catch {
+      } catch (error) {
+        reportClientError(error, {
+          area: 'home',
+          action: 'search_suggestions',
+          extras: { query: searchQuery.trim() },
+        });
         setSuggestions([]);
       } finally {
         setSearching(false);
       }
     }, 300);
 
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
-
-  useEffect(() => {
-  }, []);
+    return () => timerManager.clearManagedTimeout(timer);
+  }, [searchQuery, timerManager]);
 
   const liveCards = useMemo(() => cards.liveCards.slice(0, liveRenderCount), [cards.liveCards, liveRenderCount]);
 
   const onCardClick = (debateId: string) => {
     lockedCardIdsRef.current.add(debateId);
-    setTimeout(() => {
+    timerManager.setManagedTimeout(() => {
       unlockCard(debateId);
       navigate(`/debate/${debateId}`);
     }, 100);
@@ -667,7 +676,13 @@ export function HomePage() {
                   type="button"
                   onClick={() => {
                     setLegalMenuOpen(false);
-                    logout();
+                    void logout().catch((error) => {
+                      reportClientError(error, {
+                        area: 'home',
+                        action: 'logout',
+                      });
+                      setError('ログアウト処理に失敗しました。再試行してください。');
+                    });
                   }}
                   className="hidden rounded-lg border border-border-color px-3 py-1.5 text-xs text-slate-600 lg:inline"
                 >

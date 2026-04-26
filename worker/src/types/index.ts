@@ -1,3 +1,10 @@
+import type {
+  DebateSide,
+  DebateStatus,
+  UserRank,
+  UserRole,
+} from '../../../packages/shared/src/index';
+
 export interface Env {
   // 環境変数
   ENVIRONMENT: string;
@@ -20,20 +27,7 @@ export interface Env {
   // DEBATE_RESULT_QUEUE?: Queue;
 }
 
-export type UserRole = 'user' | 'admin';
-export type UserRank =
-  | 'bronze'
-  | 'silver'
-  | 'gold'
-  | 'platinum'
-  | 'diamond'
-  | 'master'
-  | 'grandmaster'
-  | 'champion'
-  | 'legend'
-  | 'mythic';
-export type DebateStatus = 'waiting' | 'matching' | 'in_progress' | 'voting' | 'finished' | 'cancelled';
-export type DebateSide = 'pro' | 'con';
+export type { UserRole, UserRank, DebateStatus, DebateSide };
 export type DebateResult = 'pro_win' | 'con_win' | 'draw' | 'cancelled';
 
 export interface DbUser {

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '../components/common';
 import { debateApi, matchingApi, type MatchingResponse } from '../lib/api';
+import { reportClientError } from '../lib/monitoring';
+import { useTimerManager } from '../hooks/useTimerManager';
 import { useAuthStore } from '../store/authStore';
 
 type MatchMode = 'quick' | 'ranked';
@@ -80,9 +82,10 @@ export function MatchingPage() {
   const [opponent, setOpponent] = useState<OpponentInfo | null>(null);
   const [debateId, setDebateId] = useState<string | null>(null);
   const [dotStep, setDotStep] = useState(1);
+  const timerManager = useTimerManager();
 
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const redirectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollingRef = useRef<ReturnType<typeof globalThis.setInterval> | null>(null);
+  const redirectRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
 
   const animatedDots = useMemo(() => '.'.repeat(dotStep), [dotStep]);
 
@@ -91,10 +94,10 @@ export function MatchingPage() {
 
   const clearPolling = useCallback(() => {
     if (pollingRef.current) {
-      clearInterval(pollingRef.current);
+      timerManager.clearManagedInterval(pollingRef.current);
       pollingRef.current = null;
     }
-  }, []);
+  }, [timerManager]);
 
   const applySearchingPayload = (payload: MatchingResponse) => {
     setViewState('searching');
@@ -110,7 +113,12 @@ export function MatchingPage() {
 
     try {
       await debateApi.getSnapshot(payload.debateId);
-    } catch {
+    } catch (error) {
+      reportClientError(error, {
+        area: 'matching',
+        action: 'preload_debate_snapshot',
+        extras: { debateId: payload.debateId },
+      });
       setError('ディベート状態の初期化を確認できませんでした。もう一度マッチングしてください。');
       setViewState('idle');
       setMode(null);
@@ -138,10 +146,10 @@ export function MatchingPage() {
     }
 
     if (redirectRef.current) {
-      clearTimeout(redirectRef.current);
+      timerManager.clearManagedTimeout(redirectRef.current);
     }
 
-    redirectRef.current = setTimeout(() => {
+    redirectRef.current = timerManager.setManagedTimeout(() => {
       navigate(`/debate/${payload.debateId}`);
     }, 2800);
   };
@@ -149,7 +157,7 @@ export function MatchingPage() {
   const startPolling = () => {
     clearPolling();
 
-    pollingRef.current = setInterval(async () => {
+    pollingRef.current = timerManager.setManagedInterval(async () => {
       try {
         const status = await matchingApi.getStatus();
 
@@ -165,6 +173,11 @@ export function MatchingPage() {
 
         setViewState('idle');
       } catch (pollError) {
+        reportClientError(pollError, {
+          area: 'matching',
+          action: 'poll_status',
+          extras: { mode },
+        });
         const message = pollError instanceof Error ? pollError.message : 'マッチング状態の取得に失敗しました';
         setError(message);
         clearPolling();
@@ -202,6 +215,11 @@ export function MatchingPage() {
       applySearchingPayload(result);
       startPolling();
     } catch (joinError) {
+      reportClientError(joinError, {
+        area: 'matching',
+        action: 'start_matching',
+        extras: { mode: nextMode },
+      });
       const message = joinError instanceof Error ? joinError.message : 'マッチング開始に失敗しました';
       setError(message);
       setViewState('idle');
@@ -214,14 +232,19 @@ export function MatchingPage() {
     clearPolling();
 
     if (redirectRef.current) {
-      clearTimeout(redirectRef.current);
+      timerManager.clearManagedTimeout(redirectRef.current);
       redirectRef.current = null;
     }
 
     try {
       await matchingApi.cancel();
-    } catch {
-      // 失敗しても画面は待機終了にする
+    } catch (error) {
+      reportClientError(error, {
+        area: 'matching',
+        action: 'cancel_matching',
+        extras: { mode },
+      });
+      setError('サーバー側のキャンセル確認に失敗しました。画面を待機状態に戻します。');
     }
 
     setViewState('idle');
@@ -232,7 +255,7 @@ export function MatchingPage() {
   };
 
   useEffect(() => {
-    const id = setInterval(() => {
+    const id = timerManager.setManagedInterval(() => {
       setTip((prev) => {
         let next = randomFrom(MATCHING_HINTS);
         while (next === prev && MATCHING_HINTS.length > 1) {
@@ -242,20 +265,20 @@ export function MatchingPage() {
       });
     }, 6000);
 
-    return () => clearInterval(id);
-  }, []);
+    return () => timerManager.clearManagedInterval(id);
+  }, [timerManager]);
 
   useEffect(() => {
     if (viewState !== 'searching') {
       return;
     }
 
-    const id = setInterval(() => {
+    const id = timerManager.setManagedInterval(() => {
       setDotStep((prev) => (prev >= 3 ? 1 : prev + 1));
     }, 400);
 
-    return () => clearInterval(id);
-  }, [viewState]);
+    return () => timerManager.clearManagedInterval(id);
+  }, [timerManager, viewState]);
 
   useEffect(() => {
     let mounted = true;
@@ -269,12 +292,20 @@ export function MatchingPage() {
         if (status.status !== 'idle') {
           try {
             await matchingApi.cancel();
-          } catch {
-            // キャンセル失敗時も画面はアイドル表示を優先
+          } catch (error) {
+            reportClientError(error, {
+              area: 'matching',
+              action: 'force_cancel_on_open',
+            });
+            setError('前回マッチングのキャンセル確認に失敗しました。状態を初期化します。');
           }
         }
-      } catch {
-        // 初期確認失敗時も手動開始を許可する
+      } catch (error) {
+        reportClientError(error, {
+          area: 'matching',
+          action: 'check_status_on_open',
+        });
+        setError('初期状態の取得に失敗しました。再試行できます。');
       } finally {
         if (mounted) {
           clearPolling();
@@ -300,10 +331,10 @@ export function MatchingPage() {
     return () => {
       clearPolling();
       if (redirectRef.current) {
-        clearTimeout(redirectRef.current);
+        timerManager.clearManagedTimeout(redirectRef.current);
       }
     };
-  }, [clearPolling]);
+  }, [clearPolling, timerManager]);
 
   const rightAvatarClass =
     viewState === 'matched'

@@ -6,10 +6,12 @@ import {
   type DebateSnapshot,
   type HomeLiveCard,
 } from '../lib/api';
+import { reportClientError } from '../lib/monitoring';
 import { supabaseRealtime } from '../lib/supabase';
 import { useAuthStore } from '../store/authStore';
 import { AppNavigation } from '../components/layout';
 import { LiveBadge, LiveEmptyState } from '../components/common';
+import { useTimerManager } from '../hooks/useTimerManager';
 
 type ToastType = 'info' | 'error';
 
@@ -82,6 +84,7 @@ function durationForTicker(text: string): number {
 export function SlideFeedPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuthStore();
+  const timerManager = useTimerManager();
 
   const [liveCards, setLiveCards] = useState<HomeLiveCard[]>([]);
   const [loading, setLoading] = useState(true);
@@ -106,17 +109,17 @@ export function SlideFeedPage() {
   const [lastVoteAt, setLastVoteAt] = useState(0);
 
   const channelRef = useRef<ReturnType<NonNullable<typeof supabaseRealtime>['channel']> | null>(null);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   const reconnectAttemptRef = useRef(0);
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const navDimTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
+  const navDimTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const wheelLockRef = useRef(0);
   const pendingByDebateRef = useRef<PendingRef>({});
   const tickerQueuesRef = useRef<TickerQueueRef>({});
   const inFlightRef = useRef<Set<string>>(new Set());
   const detailsRef = useRef<Record<string, DebateSnapshot>>({});
-  const autoNextTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoNextTimeoutRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   const endedDebatesRef = useRef<Set<string>>(new Set());
   const unknownSyncAtRef = useRef(0);
   const currentIndexRef = useRef(0);
@@ -143,22 +146,22 @@ export function SlideFeedPage() {
     setToast(payload);
 
     if (toastTimerRef.current) {
-      clearTimeout(toastTimerRef.current);
+      timerManager.clearManagedTimeout(toastTimerRef.current);
     }
-    toastTimerRef.current = setTimeout(() => {
+    toastTimerRef.current = timerManager.setManagedTimeout(() => {
       setToast((current) => (current?.id === payload.id ? null : current));
     }, 1800);
-  }, []);
+  }, [timerManager]);
 
   const touchMobileNav = useCallback(() => {
     setMobileNavDimmed(false);
     if (navDimTimerRef.current) {
-      clearTimeout(navDimTimerRef.current);
+      timerManager.clearManagedTimeout(navDimTimerRef.current);
     }
-    navDimTimerRef.current = setTimeout(() => {
+    navDimTimerRef.current = timerManager.setManagedTimeout(() => {
       setMobileNavDimmed(true);
     }, 3000);
-  }, []);
+  }, [timerManager]);
 
   const queueTicker = useCallback((debateId: string, text: string, id?: string) => {
     const normalized = normalizeContent(text);
@@ -221,7 +224,12 @@ export function SlideFeedPage() {
       for (const comment of latestComments) {
         queueTicker(debateId, comment.content, comment.id);
       }
-    } catch {
+    } catch (error) {
+      reportClientError(error, {
+        area: 'slide_feed',
+        action: 'fetch_debate_detail',
+        extras: { debateId },
+      });
       pendingByDebateRef.current[debateId] = true;
     } finally {
       inFlightRef.current.delete(debateId);
@@ -283,6 +291,10 @@ export function SlideFeedPage() {
 
       setError(null);
     } catch (fetchError) {
+      reportClientError(fetchError, {
+        area: 'slide_feed',
+        action: 'refresh_live_cards',
+      });
       const message = fetchError instanceof Error ? fetchError.message : 'ライブフィードの取得に失敗しました';
       setError(message);
     } finally {
@@ -292,7 +304,7 @@ export function SlideFeedPage() {
 
   const teardownRealtime = useCallback(() => {
     if (reconnectTimerRef.current) {
-      clearTimeout(reconnectTimerRef.current);
+      timerManager.clearManagedTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
     }
 
@@ -300,7 +312,7 @@ export function SlideFeedPage() {
       supabaseRealtime.removeChannel(channelRef.current);
       channelRef.current = null;
     }
-  }, []);
+  }, [timerManager]);
 
   const handleEndedDebate = useCallback((debateId: string) => {
     if (endedDebatesRef.current.has(debateId)) return;
@@ -309,10 +321,10 @@ export function SlideFeedPage() {
     showToast('このディベートは終了しました', 'info');
 
     if (autoNextTimeoutRef.current) {
-      clearTimeout(autoNextTimeoutRef.current);
+      timerManager.clearManagedTimeout(autoNextTimeoutRef.current);
     }
 
-    autoNextTimeoutRef.current = setTimeout(() => {
+    autoNextTimeoutRef.current = timerManager.setManagedTimeout(() => {
       setLiveCards((prev) => {
         const endedIndex = prev.findIndex((card) => card.debateId === debateId);
         if (endedIndex < 0) return prev;
@@ -328,7 +340,7 @@ export function SlideFeedPage() {
         return next;
       });
     }, 3000);
-  }, [clearDebateArtifacts, showToast]);
+  }, [clearDebateArtifacts, showToast, timerManager]);
 
   const syncUnknownDebate = useCallback(() => {
     const now = Date.now();
@@ -612,8 +624,12 @@ export function SlideFeedPage() {
                 },
               };
             });
-          } catch {
-            // JSON parse error is ignored
+          } catch (error) {
+            reportClientError(error, {
+              area: 'slide_feed',
+              action: 'parse_ai_judgment',
+              extras: { debateId },
+            });
           }
         }
       })
@@ -629,20 +645,20 @@ export function SlideFeedPage() {
           setDisconnected(true);
 
           if (reconnectTimerRef.current) {
-            clearTimeout(reconnectTimerRef.current);
+            timerManager.clearManagedTimeout(reconnectTimerRef.current);
           }
 
           const delaySec = Math.min(4, 2 ** reconnectAttemptRef.current);
           reconnectAttemptRef.current += 1;
 
-          reconnectTimerRef.current = setTimeout(() => {
+          reconnectTimerRef.current = timerManager.setManagedTimeout(() => {
             startRealtime();
           }, delaySec * 1000);
         }
       });
 
     channelRef.current = channel;
-  }, [clearDebateArtifacts, handleEndedDebate, queueTicker, refreshLiveCards, syncUnknownDebate, teardownRealtime, user]);
+  }, [clearDebateArtifacts, handleEndedDebate, queueTicker, refreshLiveCards, syncUnknownDebate, teardownRealtime, timerManager, user]);
 
   useEffect(() => {
     refreshLiveCards();
@@ -650,11 +666,11 @@ export function SlideFeedPage() {
 
     return () => {
       teardownRealtime();
-      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-      if (navDimTimerRef.current) clearTimeout(navDimTimerRef.current);
-      if (autoNextTimeoutRef.current) clearTimeout(autoNextTimeoutRef.current);
+      if (toastTimerRef.current) timerManager.clearManagedTimeout(toastTimerRef.current);
+      if (navDimTimerRef.current) timerManager.clearManagedTimeout(navDimTimerRef.current);
+      if (autoNextTimeoutRef.current) timerManager.clearManagedTimeout(autoNextTimeoutRef.current);
     };
-  }, [refreshLiveCards, startRealtime, teardownRealtime]);
+  }, [refreshLiveCards, startRealtime, teardownRealtime, timerManager]);
 
   useEffect(() => {
     const onResize = () => {
@@ -690,13 +706,13 @@ export function SlideFeedPage() {
     if (alreadyShown) return;
 
     setShowSwipeHint(true);
-    const timer = setTimeout(() => {
+    const timer = timerManager.setManagedTimeout(() => {
       setShowSwipeHint(false);
       window.localStorage.setItem(SWIPE_HINT_KEY, '1');
     }, 800);
 
-    return () => clearTimeout(timer);
-  }, [mobileView]);
+    return () => timerManager.clearManagedTimeout(timer);
+  }, [mobileView, timerManager]);
 
   useEffect(() => {
     if (!currentDebateId) return;
@@ -859,10 +875,10 @@ export function SlideFeedPage() {
     setReleaseAnimating(true);
     setDragY(0);
     setIsDragging(false);
-    setTimeout(() => {
+    timerManager.setManagedTimeout(() => {
       setReleaseAnimating(false);
     }, prefersReducedMotion ? 0 : 300);
-  }, [commentDrawerOpen, dragY, mobileView, moveNext, movePrev, prefersReducedMotion]);
+  }, [commentDrawerOpen, dragY, mobileView, moveNext, movePrev, prefersReducedMotion, timerManager]);
 
   const handleVote = useCallback(async (side: 'pro' | 'con') => {
     if (!currentDebateId || !currentDetail) return;
@@ -930,7 +946,12 @@ export function SlideFeedPage() {
           },
         };
       });
-    } catch {
+    } catch (error) {
+      reportClientError(error, {
+        area: 'slide_feed',
+        action: 'vote',
+        extras: { debateId: currentDebateId, side },
+      });
       setDetailsById((prev) => {
         const current = prev[currentDebateId];
         if (!current) return prev;
@@ -1003,6 +1024,11 @@ export function SlideFeedPage() {
         };
       });
     } catch (sendError) {
+      reportClientError(sendError, {
+        area: 'slide_feed',
+        action: 'send_comment',
+        extras: { debateId: currentDebateId },
+      });
       const message = sendError instanceof Error ? sendError.message : 'コメント送信に失敗しました';
       showToast(message, 'error');
     } finally {
@@ -1017,7 +1043,12 @@ export function SlideFeedPage() {
     try {
       await navigator.clipboard.writeText(url);
       showToast('コピーしました', 'info');
-    } catch {
+    } catch (error) {
+      reportClientError(error, {
+        area: 'slide_feed',
+        action: 'copy_share_url',
+        extras: { debateId: currentDebateId },
+      });
       showToast('コピーに失敗しました', 'error');
     }
   }, [currentDebateId, showToast]);

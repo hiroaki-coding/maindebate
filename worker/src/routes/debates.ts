@@ -1876,21 +1876,57 @@ app.post('/:debateId/message', authRequired, async (c) => {
       .maybeSingle();
 
     if (stateError) {
-      await supabase.from('debate_messages').delete().eq('id', inserted.id);
       throw new Error(stateError.message);
     }
 
+    // Keep the inserted message even when optimistic state update conflicts.
+    // We reconcile with the latest DB state and retry one guarded turn update so
+    // users do not lose valid messages during race conditions.
+    let effectiveTurn: DebateSide = nextTurn;
+    let effectiveTurnNumber = state.turn_number + 1;
+
     if (!stateUpdated) {
-      await supabase.from('debate_messages').delete().eq('id', inserted.id);
-      return c.json({ error: 'ターン更新が発生したため、再送信してください' }, 409);
+      let latestState = await fetchDebateState(supabase, debateId);
+
+      if (
+        latestState.status === 'in_progress'
+        && latestState.current_turn === role
+        && latestState.turn_number === state.turn_number
+      ) {
+        const { data: retriedState, error: retryError } = await supabase
+          .from('debate_state')
+          .update({
+            current_turn: nextTurn,
+            turn_number: state.turn_number + 1,
+            turn_started_at: nowIso,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('debate_id', debateId)
+          .eq('status', 'in_progress')
+          .eq('current_turn', role)
+          .eq('turn_number', state.turn_number)
+          .select('debate_id, status, current_turn, turn_number, started_at, turn_started_at, voting_started_at, pro_votes, con_votes, updated_at')
+          .maybeSingle();
+
+        if (retryError) {
+          throw new Error(retryError.message);
+        }
+
+        latestState = retriedState as DebateStateRow ?? (await fetchDebateState(supabase, debateId));
+      }
+
+      if (latestState.status === 'in_progress' && latestState.current_turn) {
+        effectiveTurn = latestState.current_turn;
+        effectiveTurnNumber = latestState.turn_number;
+      }
     }
 
     await publishRealtimeEvent(c.env, debateId, {
       type: 'message:new',
       source: 'message',
       status: 'in_progress',
-      currentTurn: nextTurn,
-      turnNumber: state.turn_number + 1,
+      currentTurn: effectiveTurn,
+      turnNumber: effectiveTurnNumber,
       payload: {
         id: inserted.id,
         userId,
@@ -1902,8 +1938,8 @@ app.post('/:debateId/message', authRequired, async (c) => {
 
     return c.json({
       message: inserted,
-      nextTurn: nextTurn,
-      nextTurnNumber: state.turn_number + 1,
+      nextTurn: effectiveTurn,
+      nextTurnNumber: effectiveTurnNumber,
     });
   } catch (error) {
     console.error('Debate message error:', error);
