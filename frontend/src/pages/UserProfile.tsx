@@ -146,6 +146,22 @@ export function UserProfilePage() {
     return rankDefs.find((row) => row.rank === profile?.rank) ?? null;
   }, [profile?.rank, rankDefs]);
 
+  const rankIndex = useMemo(() => {
+    if (!profile?.rank) return -1;
+    return rankDefs.findIndex((entry) => entry.rank === profile.rank);
+  }, [profile?.rank, rankDefs]);
+
+  const mobileRankWindow = useMemo(() => {
+    if (rankDefs.length === 0) return [];
+    if (rankIndex < 0) return rankDefs.slice(0, 3);
+
+    const indexes = [rankIndex - 1, rankIndex, rankIndex + 1].filter(
+      (index) => index >= 0 && index < rankDefs.length
+    );
+
+    return indexes.map((index) => rankDefs[index]);
+  }, [rankDefs, rankIndex]);
+
   const fetchProfile = useCallback(async () => {
     if (!targetUserId) return;
     try {
@@ -240,8 +256,6 @@ export function UserProfilePage() {
     );
   }
 
-  const rankIndex = rankDefs.findIndex((entry) => entry.rank === profile.rank);
-
   return (
     <div className="min-h-screen bg-transparent text-slate-800" style={{ paddingBottom: '56px' }}>
       {toast && (
@@ -256,12 +270,12 @@ export function UserProfilePage() {
         <header
           className="relative overflow-hidden"
           style={{
-            height: '180px',
+            height: '210px',
             background: `linear-gradient(140deg, ${profileRankDef?.bannerFrom ?? '#1a1a1a'} 0%, ${profileRankDef?.bannerTo ?? '#333'} 100%)`,
           }}
         >
-          <div className="mx-auto flex h-full max-w-[1400px] items-center gap-4 px-4 md:px-6">
-            <div className="h-16 w-16 rounded-full border-2 border-white/80 bg-white/20 md:h-24 md:w-24 overflow-hidden grid place-items-center text-white text-xl font-bold">
+          <div className="mx-auto flex h-full max-w-[1400px] items-end gap-4 px-4 pb-5 md:items-center md:px-6 md:pb-0">
+            <div className="h-20 w-20 rounded-full border-2 border-white/80 bg-white/20 md:h-24 md:w-24 overflow-hidden grid place-items-center text-white text-xl font-bold">
               {profile.avatarUrl ? (
                 <img src={profile.avatarUrl} alt={profile.displayName} className="h-full w-full object-cover" />
               ) : (
@@ -270,7 +284,7 @@ export function UserProfilePage() {
             </div>
 
             <div className="min-w-0 text-white">
-              <p className="truncate text-[20px] font-semibold md:text-[24px]">{profile.displayName}</p>
+              <p className="truncate text-[22px] font-semibold leading-tight md:text-[24px]">{profile.displayName}</p>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-3 py-1 text-xs">
                   <RankIcon rank={profile.rank} color={profileRankDef?.badgeColor ?? '#fff'} size={20} />
@@ -286,6 +300,43 @@ export function UserProfilePage() {
         <main className="mx-auto max-w-[1400px] px-4 py-5 md:px-6">
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
             <section className="space-y-4 animate-cyber-enter">
+              <div className="rounded-2xl border border-border-color bg-white/95 p-4 shadow-lg md:hidden">
+                <p className="text-[11px] tracking-[0.12em] text-slate-500">RANK SNAPSHOT</p>
+
+                <div className="mt-2 flex items-end justify-between gap-3">
+                  <div>
+                    <p className="text-xs text-slate-500">獲得PT</p>
+                    <p className="mt-1 text-[40px] font-bold leading-none tracking-tight text-slate-900">
+                      {compactNumber(profile.points)}
+                      <span className="ml-1 text-sm font-semibold text-slate-500">pt</span>
+                    </p>
+                  </div>
+                  <div className="rounded-full border border-border-color bg-white/90 px-3 py-1 text-[11px] font-medium text-slate-600">
+                    世界順位 #{profile.worldRank}
+                  </div>
+                </div>
+
+                <div className="mt-4 grid grid-cols-3 gap-2">
+                  {mobileRankWindow.map((rank) => {
+                    const current = rank.rank === profile.rank;
+                    const tint = current
+                      ? 'border-[var(--color-pro)] bg-[var(--color-pro-bg)] shadow-[0_0_0_2px_rgba(217,48,37,0.2)]'
+                      : 'border-slate-200 bg-white';
+
+                    return (
+                      <div key={`mobile-rank-${rank.rank}`} className={`rounded-xl border p-2 text-center ${tint}`}>
+                        <div className="grid place-items-center">
+                          <RankIcon rank={rank.rank} color={rank.badgeColor} size={40} />
+                        </div>
+                        <p className={`mt-1 text-[11px] font-semibold ${current ? 'text-[var(--color-pro)]' : 'text-slate-600'}`}>
+                          {rankLabel(rank.rank)}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-xl border border-border-color bg-white p-4">
                   <p className="text-xs text-slate-500">総ディベート数</p>
@@ -316,8 +367,16 @@ export function UserProfilePage() {
               </div>
 
               <div className="rounded-xl border border-border-color bg-white p-4">
+                <div className="mb-3 rounded-xl border border-border-color bg-white/90 px-3 py-3 md:hidden">
+                  <p className="text-[11px] text-slate-500">現在のランク</p>
+                  <div className="mt-1 flex items-end justify-between gap-3">
+                    <p className="text-2xl font-bold leading-none text-slate-900">{rankLabel(profile.progress.currentRank)}</p>
+                    <p className="text-xs text-slate-500">{compactNumber(profile.progress.currentPoints)}pt</p>
+                  </div>
+                </div>
+
                 <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
-                  <span>現在 {compactNumber(profile.progress.currentPoints)}pt</span>
+                  <span className="hidden md:inline">現在 {compactNumber(profile.progress.currentPoints)}pt</span>
                   <span>
                     {profile.progress.isMaxRank ? '最高ランク達成 🎉' : `残り ${compactNumber(profile.progress.remainingToNext)}pt`}
                   </span>
@@ -337,7 +396,30 @@ export function UserProfilePage() {
 
               <div className="rounded-xl border border-border-color bg-white p-4">
                 <p className="mb-3 text-sm font-semibold">ランク階段</p>
-                <div className="flex gap-3 overflow-x-auto pb-2">
+                <div className="flex gap-3 overflow-x-auto pb-2 md:hidden">
+                  {mobileRankWindow.map((rank) => {
+                    const index = rankDefs.findIndex((row) => row.rank === rank.rank);
+                    const reached = index <= rankIndex;
+                    const current = index === rankIndex;
+                    return (
+                      <div
+                        key={`mobile-stair-${rank.rank}`}
+                        className={`min-w-[88px] rounded-xl border p-2 text-center ${
+                          current
+                            ? 'border-[var(--color-pro)] shadow-[0_0_0_3px_rgba(217,48,37,0.24)]'
+                            : 'border-slate-200'
+                        } ${reached ? 'opacity-100' : 'opacity-45'}`}
+                      >
+                        <div className="grid place-items-center">
+                          <RankIcon rank={rank.rank} color={rank.badgeColor} size={46} />
+                        </div>
+                        <p className="mt-1 text-[11px] font-semibold">{rankLabel(rank.rank)}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="hidden gap-3 overflow-x-auto pb-2 md:flex">
                   {rankDefs.map((rank, index) => {
                     const reached = index <= rankIndex;
                     const current = index === rankIndex;
