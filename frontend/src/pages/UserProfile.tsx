@@ -268,9 +268,8 @@ export function UserProfilePage() {
 
       <div className="md:pl-[220px]">
         <header
-          className="relative overflow-hidden"
+          className="relative h-[210px] overflow-hidden md:h-[240px]"
           style={{
-            height: '210px',
             background: `linear-gradient(140deg, ${profileRankDef?.bannerFrom ?? '#1a1a1a'} 0%, ${profileRankDef?.bannerTo ?? '#333'} 100%)`,
           }}
         >
@@ -334,6 +333,55 @@ export function UserProfilePage() {
                       </div>
                     );
                   })}
+                </div>
+              </div>
+
+              <div className="hidden rounded-2xl border border-border-color bg-white/95 p-6 shadow-lg md:block">
+                <div className="grid items-center gap-6 lg:grid-cols-[minmax(0,1fr)_420px]">
+                  <div>
+                    <p className="text-xs tracking-[0.12em] text-slate-500">RANK SNAPSHOT</p>
+                    <div className="mt-3 flex flex-wrap items-end gap-5">
+                      <div>
+                        <p className="text-xs text-slate-500">獲得PT</p>
+                        <p className="mt-1 text-[60px] font-bold leading-none tracking-tight text-slate-900 xl:text-[70px]">
+                          {compactNumber(profile.points)}
+                          <span className="ml-2 text-base font-semibold text-slate-500">pt</span>
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        <div className="inline-flex rounded-full border border-border-color bg-white px-4 py-1.5 text-sm font-medium text-slate-600">
+                          世界順位 #{profile.worldRank}
+                        </div>
+                        <div className="inline-flex items-center gap-2 rounded-full border border-border-color bg-[var(--color-pro-bg)] px-4 py-1.5 text-sm font-semibold text-[var(--color-pro)]">
+                          <RankIcon rank={profile.progress.currentRank} color={profileRankDef?.badgeColor ?? '#fff'} size={24} />
+                          現在 {rankLabel(profile.progress.currentRank)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="mb-2 text-xs text-slate-500">前ランク / 現在ランク / 次ランク</p>
+                    <div className="flex gap-3">
+                      {mobileRankWindow.map((rank) => {
+                        const current = rank.rank === profile.rank;
+                        const tint = current
+                          ? 'border-[var(--color-pro)] bg-[var(--color-pro-bg)] shadow-[0_0_0_3px_rgba(217,48,37,0.2)]'
+                          : 'border-slate-200 bg-white';
+
+                        return (
+                          <div key={`desktop-rank-${rank.rank}`} className={`min-w-[124px] rounded-xl border p-3 text-center ${tint}`}>
+                            <div className="grid place-items-center">
+                              <RankIcon rank={rank.rank} color={rank.badgeColor} size={52} />
+                            </div>
+                            <p className={`mt-2 text-sm font-semibold ${current ? 'text-[var(--color-pro)]' : 'text-slate-600'}`}>
+                              {rankLabel(rank.rank)}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -419,23 +467,24 @@ export function UserProfilePage() {
                   })}
                 </div>
 
-                <div className="hidden gap-3 overflow-x-auto pb-2 md:flex">
-                  {rankDefs.map((rank, index) => {
+                <div className="hidden gap-4 overflow-x-auto pb-2 md:flex">
+                  {mobileRankWindow.map((rank) => {
+                    const index = rankDefs.findIndex((row) => row.rank === rank.rank);
                     const reached = index <= rankIndex;
                     const current = index === rankIndex;
                     return (
                       <div
-                        key={rank.rank}
-                        className={`min-w-[72px] rounded-lg border p-2 text-center ${
+                        key={`desktop-stair-${rank.rank}`}
+                        className={`min-w-[126px] rounded-xl border p-3 text-center ${
                           current
-                            ? 'border-[var(--color-pro)] shadow-[0_0_0_3px_rgba(217,48,37,0.9)]'
+                            ? 'border-[var(--color-pro)] shadow-[0_0_0_3px_rgba(217,48,37,0.25)]'
                             : 'border-slate-200'
-                        } ${reached ? 'opacity-100' : 'opacity-35'}`}
+                        } ${reached ? 'opacity-100' : 'opacity-45'}`}
                       >
                         <div className="grid place-items-center">
-                          <RankIcon rank={rank.rank} color={rank.badgeColor} size={42} />
+                          <RankIcon rank={rank.rank} color={rank.badgeColor} size={58} />
                         </div>
-                        <p className="mt-1 text-[10px] font-medium">{rankLabel(rank.rank)}</p>
+                        <p className="mt-2 text-sm font-semibold">{rankLabel(rank.rank)}</p>
                       </div>
                     );
                   })}
