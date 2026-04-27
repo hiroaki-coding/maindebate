@@ -111,6 +111,7 @@ export function SlideFeedPage() {
   const channelRef = useRef<ReturnType<NonNullable<typeof supabaseRealtime>['channel']> | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   const reconnectAttemptRef = useRef(0);
+  const activeChannelIdRef = useRef<string | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   const navDimTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -311,6 +312,7 @@ export function SlideFeedPage() {
     if (channelRef.current && supabaseRealtime) {
       supabaseRealtime.removeChannel(channelRef.current);
       channelRef.current = null;
+      activeChannelIdRef.current = null;
     }
   }, [timerManager]);
 
@@ -360,6 +362,7 @@ export function SlideFeedPage() {
       typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
         ? crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    activeChannelIdRef.current = channelId;
 
     const channel = supabaseRealtime
       .channel(`slide-feed-${channelId}`)
@@ -634,6 +637,10 @@ export function SlideFeedPage() {
         }
       })
       .subscribe(async (status) => {
+        if (activeChannelIdRef.current !== channelId) {
+          return;
+        }
+
         if (status === 'SUBSCRIBED') {
           reconnectAttemptRef.current = 0;
           setDisconnected(false);
