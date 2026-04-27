@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 type TimeoutId = ReturnType<typeof globalThis.setTimeout>;
 type IntervalId = ReturnType<typeof globalThis.setInterval>;
@@ -57,11 +57,12 @@ export function useTimerManager() {
     };
   }, [clearAllTimers]);
 
-  return {
+  // Keep the API object reference stable so consumers can safely use it in dependency arrays.
+  return useMemo(() => ({
     setManagedTimeout,
     setManagedInterval,
     clearManagedTimeout,
     clearManagedInterval,
     clearAllTimers,
-  };
+  }), [setManagedTimeout, setManagedInterval, clearManagedTimeout, clearManagedInterval, clearAllTimers]);
 }
