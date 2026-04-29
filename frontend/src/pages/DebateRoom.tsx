@@ -108,6 +108,9 @@ export function DebateRoomPage() {
   const progressInFlightRef = useRef(false);
   const lastProgressRequestAtRef = useRef(0);
   const presenceSyncedRef = useRef(false);
+  const snapshotInFlightRef = useRef(false);
+  const lastSnapshotSyncAtRef = useRef(0);
+  const latestSnapshotRef = useRef<DebateSnapshot | null>(null);
 
   const mySide = snapshot?.role === 'pro' || snapshot?.role === 'con' ? snapshot.role : null;
   const isDebater = mySide !== null;
@@ -189,6 +192,10 @@ export function DebateRoomPage() {
 
   const refreshSnapshot = useCallback(async () => {
     if (!debateId) return;
+    if (snapshotInFlightRef.current) return;
+
+    snapshotInFlightRef.current = true;
+    lastSnapshotSyncAtRef.current = Date.now();
 
     try {
       const data = await debateApi.getSnapshot(debateId);
@@ -204,9 +211,27 @@ export function DebateRoomPage() {
       const message = fetchError instanceof Error ? fetchError.message : 'ディベート情報の取得に失敗しました';
       setError(message);
     } finally {
+      snapshotInFlightRef.current = false;
       setLoading(false);
     }
   }, [applyServerNow, debateId]);
+
+  const requestSnapshotRefresh = useCallback((delayMs = 0) => {
+    if (!debateId) return;
+    const now = Date.now();
+    if (now - lastSnapshotSyncAtRef.current < 1200) return;
+
+    lastSnapshotSyncAtRef.current = now;
+
+    if (delayMs <= 0) {
+      void refreshSnapshot();
+      return;
+    }
+
+    timerManager.setManagedTimeout(() => {
+      void refreshSnapshot();
+    }, delayMs);
+  }, [debateId, refreshSnapshot, timerManager]);
 
   const applyTurnNotification = useCallback(
     (nextSnapshot: DebateSnapshot) => {
@@ -232,6 +257,10 @@ export function DebateRoomPage() {
     if (!snapshot) return;
     applyTurnNotification(snapshot);
   }, [snapshot, applyTurnNotification]);
+
+  useEffect(() => {
+    latestSnapshotRef.current = snapshot;
+  }, [snapshot]);
 
   useEffect(() => {
     if (!shouldWarnBeforeLeave) return;
@@ -381,6 +410,15 @@ export function DebateRoomPage() {
   useEffect(() => {
     refreshSnapshot();
   }, [refreshSnapshot]);
+
+  useEffect(() => {
+    if (!debateId || snapshot?.status !== 'in_progress') return;
+    const id = timerManager.setManagedInterval(() => {
+      requestSnapshotRefresh();
+    }, 8000);
+
+    return () => timerManager.clearManagedInterval(id);
+  }, [debateId, requestSnapshotRefresh, snapshot?.status, timerManager]);
 
   useEffect(() => {
     if (!snapshot) return;
@@ -538,6 +576,10 @@ export function DebateRoomPage() {
               ],
             };
           });
+
+          if (latestSnapshotRef.current?.isDebater) {
+            requestSnapshotRefresh(350);
+          }
         }
       )
       .on(
@@ -608,6 +650,22 @@ export function DebateRoomPage() {
             updated_at?: string | null;
           };
 
+          if (row.updated_at) {
+            applyServerNow(row.updated_at);
+          }
+
+          const prevSnapshot = latestSnapshotRef.current;
+          const prevTurn = prevSnapshot?.turn.current ?? null;
+          const prevTurnNumber = prevSnapshot?.turn.number ?? null;
+          const prevStatus = prevSnapshot?.status ?? null;
+          const nextTurn = row.current_turn ?? prevTurn;
+          const nextTurnNumber = typeof row.turn_number === 'number' ? row.turn_number : prevTurnNumber;
+          const nextStatus = row.status ?? prevStatus;
+          const turnChanged =
+            prevSnapshot
+            && (nextTurn !== prevTurn || nextTurnNumber !== prevTurnNumber);
+          const statusChanged = prevSnapshot && nextStatus !== prevStatus;
+
           setSnapshot((prev) => {
             if (!prev) return prev;
 
@@ -637,6 +695,10 @@ export function DebateRoomPage() {
               },
             };
           });
+
+          if ((turnChanged || statusChanged) && prevSnapshot?.isDebater) {
+            requestSnapshotRefresh(250);
+          }
         }
       )
       .on(
@@ -665,7 +727,7 @@ export function DebateRoomPage() {
     return () => {
       realtime.removeChannel(channel);
     };
-  }, [debateId, user]);
+  }, [applyServerNow, debateId, requestSnapshotRefresh, user]);
 
   const handleSendMessage = async () => {
     if (!debateId || !snapshot) return;
@@ -745,6 +807,8 @@ export function DebateRoomPage() {
           },
         };
       });
+
+      requestSnapshotRefresh(400);
 
       setMessageInput('');
       setFlash(null);
