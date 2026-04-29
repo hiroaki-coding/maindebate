@@ -115,6 +115,15 @@ type DebateContext = {
   viewerUserId: string | null;
 };
 
+type SubmitDebateMessageRpcRow = {
+  ok: boolean;
+  error_code: string | null;
+  message_id: string | null;
+  current_turn: DebateSide | null;
+  turn_number: number | null;
+  message_created_at: string | null;
+};
+
 const app = new Hono<{ Bindings: Env; Variables: { user: AuthUser | null; firebaseUid: string } }>();
 
 const getSupabase = (env: Env) => createClient(env.SUPABASE_URL!, env.SUPABASE_SERVICE_KEY!);
@@ -1265,6 +1274,7 @@ async function advanceDebate(
   const turnDuration = context.debate.turn_duration_sec || 20;
   let turnStartMs = new Date(state.turn_started_at ?? nowIso).getTime();
   let elapsedTurn = Math.floor((now - turnStartMs) / 1000);
+  let progressedByTimeout = false;
 
   while (elapsedTurn >= turnDuration && state.status === 'in_progress') {
     if (!state.current_turn) {
@@ -1272,6 +1282,7 @@ async function advanceDebate(
     }
 
     await insertSkipMessage(supabase, context, state.current_turn, state.turn_number);
+    progressedByTimeout = true;
 
     state.turn_number += 1;
     state.current_turn = toggleSide(state.current_turn);
@@ -1294,6 +1305,10 @@ async function advanceDebate(
 
     if (error) throw new Error(error.message);
     return { state: refreshed as DebateStateRow, finalResult };
+  }
+
+  if (!progressedByTimeout) {
+    return { state };
   }
 
   const { data: updated, error: updateError } = await supabase
@@ -1815,20 +1830,6 @@ app.post('/:debateId/message', authRequired, async (c) => {
       return c.json({ error: 'あなたのターンではありません' }, 400);
     }
 
-    const { data: existingTurnMessage, error: existingTurnMessageError } = await supabase
-      .from('debate_messages')
-      .select('id')
-      .eq('debate_id', debateId)
-      .eq('side', role)
-      .eq('turn_number', state.turn_number)
-      .limit(1)
-      .maybeSingle();
-
-    if (existingTurnMessageError) throw new Error(existingTurnMessageError.message);
-    if (existingTurnMessage) {
-      return c.json({ error: 'このターンの発言はすでに送信されています' }, 409);
-    }
-
     const { data: latestRaw, error: latestError } = await supabase
       .from('debate_messages')
       .select('content')
@@ -1843,83 +1844,67 @@ app.post('/:debateId/message', authRequired, async (c) => {
     if (latestRaw?.content && normalizeContent(latestRaw.content) === content) {
       return c.json({ error: '直前と同じ内容は投稿できません' }, 400);
     }
-
-    const { data: inserted, error: insertError } = await supabase
-      .from('debate_messages')
-      .insert({
-        debate_id: debateId,
-        user_id: userId,
-        side: role,
-        turn_number: state.turn_number,
-        content,
-      })
-      .select('id, debate_id, user_id, side, turn_number, content, created_at')
-      .single();
-
-    if (insertError) throw new Error(insertError.message);
-
-    const nextTurn = toggleSide(role);
     const nowIso = new Date().toISOString();
-    const { data: stateUpdated, error: stateError } = await supabase
-      .from('debate_state')
-      .update({
-        current_turn: nextTurn,
-        turn_number: state.turn_number + 1,
-        turn_started_at: nowIso,
-        updated_at: nowIso,
+    const { data: submitResultRaw, error: submitError } = await supabase
+      .rpc('rpc_submit_debate_message', {
+        p_debate_id: debateId,
+        p_user_id: userId,
+        p_side: role,
+        p_turn_number: state.turn_number,
+        p_content: content,
+        p_now: nowIso,
       })
-      .eq('debate_id', debateId)
-      .eq('status', 'in_progress')
-      .eq('current_turn', role)
-      .eq('turn_number', state.turn_number)
-      .select('debate_id')
       .maybeSingle();
 
-    if (stateError) {
-      throw new Error(stateError.message);
+    if (submitError) {
+      throw new Error(submitError.message);
     }
 
-    // Keep the inserted message even when optimistic state update conflicts.
-    // We reconcile with the latest DB state and retry one guarded turn update so
-    // users do not lose valid messages during race conditions.
-    let effectiveTurn: DebateSide = nextTurn;
-    let effectiveTurnNumber = state.turn_number + 1;
+    if (!submitResultRaw) {
+      throw new Error('rpc_submit_debate_message returned no rows');
+    }
 
-    if (!stateUpdated) {
-      let latestState = await fetchDebateState(supabase, debateId);
+    const submitResult = submitResultRaw as SubmitDebateMessageRpcRow;
 
-      if (
-        latestState.status === 'in_progress'
-        && latestState.current_turn === role
-        && latestState.turn_number === state.turn_number
-      ) {
-        const { data: retriedState, error: retryError } = await supabase
-          .from('debate_state')
-          .update({
-            current_turn: nextTurn,
-            turn_number: state.turn_number + 1,
-            turn_started_at: nowIso,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('debate_id', debateId)
-          .eq('status', 'in_progress')
-          .eq('current_turn', role)
-          .eq('turn_number', state.turn_number)
-          .select('debate_id, status, current_turn, turn_number, started_at, turn_started_at, voting_started_at, pro_votes, con_votes, updated_at')
-          .maybeSingle();
-
-        if (retryError) {
-          throw new Error(retryError.message);
-        }
-
-        latestState = retriedState as DebateStateRow ?? (await fetchDebateState(supabase, debateId));
-      }
-
-      if (latestState.status === 'in_progress' && latestState.current_turn) {
-        effectiveTurn = latestState.current_turn;
-        effectiveTurnNumber = latestState.turn_number;
+    if (!submitResult.ok) {
+      switch (submitResult.error_code) {
+        case 'debate_not_found':
+          return c.json({ error: 'Debate not found' }, 404);
+        case 'not_in_progress':
+          return c.json({ error: 'ディベートは終了しています' }, 400);
+        case 'forbidden_side':
+          return c.json({ error: '対戦者のみ発言できます' }, 403);
+        case 'not_your_turn':
+          return c.json({ error: 'あなたのターンではありません' }, 400);
+        case 'turn_already_posted':
+          return c.json({ error: 'このターンの発言はすでに送信されています' }, 409);
+        case 'turn_mismatch':
+          return c.json({ error: 'ターンが更新されました。画面を更新して再送してください' }, 409);
+        default:
+          throw new Error(`rpc_submit_debate_message failed: ${submitResult.error_code ?? 'unknown'}`);
       }
     }
+
+    if (!submitResult.message_id || !submitResult.message_created_at) {
+      throw new Error('rpc_submit_debate_message returned incomplete success payload');
+    }
+
+    const effectiveTurn = submitResult.current_turn;
+    const effectiveTurnNumber = submitResult.turn_number;
+
+    if (!effectiveTurn || typeof effectiveTurnNumber !== 'number') {
+      throw new Error('rpc_submit_debate_message returned invalid next turn state');
+    }
+
+    const inserted: MessageRow = {
+      id: submitResult.message_id,
+      debate_id: debateId,
+      user_id: userId,
+      side: role,
+      turn_number: state.turn_number,
+      content,
+      created_at: submitResult.message_created_at,
+    };
 
     await publishRealtimeEvent(c.env, debateId, {
       type: 'message:new',

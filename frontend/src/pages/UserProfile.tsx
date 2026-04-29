@@ -162,6 +162,27 @@ export function UserProfilePage() {
     return indexes.map((index) => rankDefs[index]);
   }, [rankDefs, rankIndex]);
 
+  const desktopStairWindow = useMemo(() => {
+    if (rankDefs.length === 0) return [];
+
+    const maxItems = Math.min(5, rankDefs.length);
+    const half = Math.floor(maxItems / 2);
+    let start = Math.max(0, rankIndex - half);
+    let end = start + maxItems;
+
+    if (end > rankDefs.length) {
+      end = rankDefs.length;
+      start = Math.max(0, end - maxItems);
+    }
+
+    const window = rankDefs.slice(start, end);
+    if (window.length >= Math.min(3, rankDefs.length)) {
+      return window;
+    }
+
+    return rankDefs.slice(0, Math.min(3, rankDefs.length));
+  }, [rankDefs, rankIndex]);
+
   const fetchProfile = useCallback(async () => {
     if (!targetUserId) return;
     try {
@@ -315,24 +336,13 @@ export function UserProfilePage() {
                   </div>
                 </div>
 
-                <div className="mt-4 grid grid-cols-3 gap-2">
-                  {mobileRankWindow.map((rank) => {
-                    const current = rank.rank === profile.rank;
-                    const tint = current
-                      ? 'border-[var(--color-pro)] bg-[var(--color-pro-bg)] shadow-[0_0_0_2px_rgba(217,48,37,0.2)]'
-                      : 'border-slate-200 bg-white';
-
-                    return (
-                      <div key={`mobile-rank-${rank.rank}`} className={`rounded-xl border p-2 text-center ${tint}`}>
-                        <div className="grid place-items-center">
-                          <RankIcon rank={rank.rank} color={rank.badgeColor} size={40} />
-                        </div>
-                        <p className={`mt-1 text-[11px] font-semibold ${current ? 'text-[var(--color-pro)]' : 'text-slate-600'}`}>
-                          {rankLabel(rank.rank)}
-                        </p>
-                      </div>
-                    );
-                  })}
+                <div className="mt-4">
+                  <div className="rounded-xl border border-[var(--color-pro)] bg-[var(--color-pro-bg)] p-3 text-center shadow-[0_0_0_2px_rgba(217,48,37,0.2)]">
+                    <div className="grid place-items-center">
+                      <RankIcon rank={profile.rank} color={profileRankDef?.badgeColor ?? '#fff'} size={44} />
+                    </div>
+                    <p className="mt-1 text-xs font-semibold text-[var(--color-pro)]">現在 {rankLabel(profile.rank)}</p>
+                  </div>
                 </div>
               </div>
 
@@ -467,24 +477,27 @@ export function UserProfilePage() {
                   })}
                 </div>
 
-                <div className="hidden gap-4 overflow-x-auto pb-2 md:flex">
-                  {mobileRankWindow.map((rank) => {
+                <div
+                  className="hidden gap-3 pb-2 md:grid"
+                  style={{ gridTemplateColumns: `repeat(${Math.max(desktopStairWindow.length, 1)}, minmax(0, 1fr))` }}
+                >
+                  {desktopStairWindow.map((rank) => {
                     const index = rankDefs.findIndex((row) => row.rank === rank.rank);
                     const reached = index <= rankIndex;
                     const current = index === rankIndex;
                     return (
                       <div
                         key={`desktop-stair-${rank.rank}`}
-                        className={`min-w-[126px] rounded-xl border p-3 text-center ${
+                        className={`min-w-0 rounded-xl border p-3 text-center ${
                           current
                             ? 'border-[var(--color-pro)] shadow-[0_0_0_3px_rgba(217,48,37,0.25)]'
                             : 'border-slate-200'
                         } ${reached ? 'opacity-100' : 'opacity-45'}`}
                       >
                         <div className="grid place-items-center">
-                          <RankIcon rank={rank.rank} color={rank.badgeColor} size={58} />
+                          <RankIcon rank={rank.rank} color={rank.badgeColor} size={52} />
                         </div>
-                        <p className="mt-2 text-sm font-semibold">{rankLabel(rank.rank)}</p>
+                        <p className="mt-2 truncate text-xs font-semibold lg:text-sm">{rankLabel(rank.rank)}</p>
                       </div>
                     );
                   })}
