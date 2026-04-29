@@ -3,6 +3,42 @@ import type { DebateSide, DebateStatus } from '../../../packages/shared/src/inde
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8788';
 
+function normalizeApiBase(rawBase: string): string {
+  const trimmed = rawBase.trim();
+  if (!trimmed || trimmed === '/') {
+    return '';
+  }
+
+  return trimmed.replace(/\/+$/, '');
+}
+
+function normalizeApiEndpoint(endpoint: string): string {
+  if (!endpoint) {
+    return '/';
+  }
+
+  if (endpoint.startsWith('/')) {
+    return endpoint;
+  }
+
+  return `/${endpoint}`;
+}
+
+function joinApiUrl(base: string, endpoint: string): string {
+  const normalizedBase = normalizeApiBase(base);
+  const normalizedEndpoint = normalizeApiEndpoint(endpoint);
+
+  if (!normalizedBase) {
+    return normalizedEndpoint;
+  }
+
+  if (normalizedBase.endsWith('/api') && normalizedEndpoint.startsWith('/api/')) {
+    return `${normalizedBase}${normalizedEndpoint.slice(4)}`;
+  }
+
+  return `${normalizedBase}${normalizedEndpoint}`;
+}
+
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
@@ -57,7 +93,7 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
 
   let response: Response;
   try {
-    response = await fetch(`${API_URL}${endpoint}`, {
+    response = await fetch(joinApiUrl(API_URL, endpoint), {
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
