@@ -97,7 +97,35 @@ app.onError((err, c) => {
 });
 
 const worker: ExportedHandler<Env> = {
-  fetch: (request, env, ctx) => app.fetch(request, env, ctx),
+  fetch: (request, env, ctx) => {
+    const url = new URL(request.url);
+    const originalPathname = url.pathname;
+
+    if (url.pathname === '/api/api') {
+      url.pathname = '/api';
+    } else if (url.pathname.startsWith('/api/api/')) {
+      url.pathname = url.pathname.replace('/api/api/', '/api/');
+    }
+
+    const normalizedPath = url.pathname.replace('/api', '');
+
+    if (normalizedPath === '/auth/lock-status') {
+      if (request.method !== 'POST') {
+        return new Response('Not Found', { status: 404 });
+      }
+
+      url.pathname = `/api${normalizedPath}`;
+      const rewrittenRequest = new Request(url.toString(), request);
+      return app.fetch(rewrittenRequest, env, ctx);
+    }
+
+    if (url.pathname !== originalPathname) {
+      const rewrittenRequest = new Request(url.toString(), request);
+      return app.fetch(rewrittenRequest, env, ctx);
+    }
+
+    return app.fetch(request, env, ctx);
+  },
   scheduled: async (_event, env, ctx) => {
     ctx.waitUntil((async () => {
       try {
