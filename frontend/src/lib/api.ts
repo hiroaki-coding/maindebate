@@ -316,6 +316,7 @@ export const debateApi = {
       currentTurn: DebateSide | null;
       turnNumber: number;
       result?: DebateSnapshot['result'];
+      serverNow: string;
     }>(`/api/debates/${debateId}/progress`, {
       method: 'POST',
       optionalAuth: true,
@@ -334,6 +335,7 @@ export const debateApi = {
       };
       nextTurn: DebateSide;
       nextTurnNumber: number;
+      nextTurnStartedAt: string;
     }>(`/api/debates/${debateId}/message`, {
       method: 'POST',
       body: { content },

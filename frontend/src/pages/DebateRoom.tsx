@@ -96,6 +96,7 @@ export function DebateRoomPage() {
   const [activeTickers, setActiveTickers] = useState<TickerItem[]>([]);
   const [startOverlayDismissed, setStartOverlayDismissed] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [timeOffsetMs, setTimeOffsetMs] = useState(0);
   const [viewerCount, setViewerCount] = useState(0);
 
   const previousTurnRef = useRef<string | null>(null);
@@ -177,12 +178,22 @@ export function DebateRoomPage() {
     return () => timerManager.clearManagedInterval(id);
   }, [retryAfterSec, timerManager]);
 
+  const applyServerNow = useCallback((serverNow: string | null | undefined) => {
+    if (!serverNow) return;
+    const serverMs = new Date(serverNow).getTime();
+    if (!Number.isFinite(serverMs)) return;
+    const offset = serverMs - Date.now();
+    setTimeOffsetMs(offset);
+    setNowMs(Date.now() + offset);
+  }, []);
+
   const refreshSnapshot = useCallback(async () => {
     if (!debateId) return;
 
     try {
       const data = await debateApi.getSnapshot(debateId);
       setSnapshot(data);
+      applyServerNow(data.timing.serverNow);
       setError(null);
     } catch (fetchError) {
       reportClientError(fetchError, {
@@ -195,7 +206,7 @@ export function DebateRoomPage() {
     } finally {
       setLoading(false);
     }
-  }, [debateId]);
+  }, [applyServerNow, debateId]);
 
   const applyTurnNotification = useCallback(
     (nextSnapshot: DebateSnapshot) => {
@@ -259,11 +270,11 @@ export function DebateRoomPage() {
 
   useEffect(() => {
     const id = timerManager.setManagedInterval(() => {
-      setNowMs(Date.now());
+      setNowMs(Date.now() + timeOffsetMs);
     }, 1000);
 
     return () => timerManager.clearManagedInterval(id);
-  }, [timerManager]);
+  }, [timeOffsetMs, timerManager]);
 
   useEffect(() => {
     if (!snapshot) return;
@@ -416,6 +427,7 @@ export function DebateRoomPage() {
 
     void debateApi.progress(debateId)
       .then((progressed) => {
+        applyServerNow(progressed.serverNow);
         setSnapshot((prev) => {
           if (!prev) return prev;
           const turnChanged =
@@ -432,8 +444,8 @@ export function DebateRoomPage() {
             result: progressed.result ?? prev.result,
             timing: {
               ...prev.timing,
-              turnStartedAt: turnChanged ? new Date().toISOString() : prev.timing.turnStartedAt,
-              serverNow: new Date().toISOString(),
+              turnStartedAt: turnChanged ? progressed.serverNow : prev.timing.turnStartedAt,
+              serverNow: progressed.serverNow,
             },
           };
         });
@@ -448,7 +460,7 @@ export function DebateRoomPage() {
       .finally(() => {
         progressInFlightRef.current = false;
       });
-  }, [debateId, snapshot, overallRemainingSec, turnRemainingSec]);
+  }, [applyServerNow, debateId, snapshot, overallRemainingSec, turnRemainingSec]);
 
   useEffect(() => {
     if (!debateId || !supabaseRealtime) return;
@@ -593,6 +605,7 @@ export function DebateRoomPage() {
             started_at?: string | null;
             turn_started_at?: string | null;
             voting_started_at?: string | null;
+            updated_at?: string | null;
           };
 
           setSnapshot((prev) => {
@@ -620,7 +633,7 @@ export function DebateRoomPage() {
                 startedAt: row.started_at ?? prev.timing.startedAt,
                 turnStartedAt: row.turn_started_at ?? prev.timing.turnStartedAt,
                 votingStartedAt: row.voting_started_at ?? prev.timing.votingStartedAt,
-                serverNow: new Date().toISOString(),
+                serverNow: row.updated_at ?? prev.timing.serverNow,
               },
             };
           });
@@ -678,6 +691,7 @@ export function DebateRoomPage() {
     setIsSubmittingMessage(true);
     try {
       const sent = await debateApi.sendMessage(debateId, content);
+      applyServerNow(sent.nextTurnStartedAt);
 
       setSnapshot((prev) => {
         if (!prev) return prev;
@@ -690,8 +704,8 @@ export function DebateRoomPage() {
             },
             timing: {
               ...prev.timing,
-              turnStartedAt: new Date().toISOString(),
-              serverNow: new Date().toISOString(),
+              turnStartedAt: sent.nextTurnStartedAt,
+              serverNow: sent.nextTurnStartedAt,
             },
           };
         }
@@ -726,8 +740,8 @@ export function DebateRoomPage() {
           },
           timing: {
             ...prev.timing,
-            turnStartedAt: new Date().toISOString(),
-            serverNow: new Date().toISOString(),
+            turnStartedAt: sent.nextTurnStartedAt,
+            serverNow: sent.nextTurnStartedAt,
           },
         };
       });
@@ -841,6 +855,7 @@ export function DebateRoomPage() {
     setStartOverlayState(true);
     try {
       const started = await debateApi.startDebate(debateId);
+      applyServerNow(started.turnStartedAt ?? started.startedAt ?? null);
 
       setSnapshot((prev) => {
         if (!prev) return prev;
@@ -856,7 +871,7 @@ export function DebateRoomPage() {
             ...prev.timing,
             startedAt: started.startedAt,
             turnStartedAt: started.turnStartedAt,
-            serverNow: new Date().toISOString(),
+            serverNow: started.turnStartedAt ?? started.startedAt ?? prev.timing.serverNow,
           },
         };
       });

@@ -121,6 +121,7 @@ type SubmitDebateMessageRpcRow = {
   message_id: string | null;
   current_turn: DebateSide | null;
   turn_number: number | null;
+  turn_started_at: string | null;
   message_created_at: string | null;
 };
 
@@ -1691,6 +1692,7 @@ app.post('/:debateId/progress', authOptional, async (c) => {
       currentTurn: state.current_turn,
       turnNumber: state.turn_number,
       result: finalResult ?? (await parseAiJudgment(context.debate.ai_judgment)),
+      serverNow: new Date().toISOString(),
     });
   } catch (error) {
     console.error('Debate progress error:', error);
@@ -1891,9 +1893,14 @@ app.post('/:debateId/message', authRequired, async (c) => {
 
     const effectiveTurn = submitResult.current_turn;
     const effectiveTurnNumber = submitResult.turn_number;
+    const nextTurnStartedAt = submitResult.turn_started_at;
 
     if (!effectiveTurn || typeof effectiveTurnNumber !== 'number') {
       throw new Error('rpc_submit_debate_message returned invalid next turn state');
+    }
+
+    if (!nextTurnStartedAt) {
+      throw new Error('rpc_submit_debate_message returned missing turn_started_at');
     }
 
     const inserted: MessageRow = {
@@ -1925,6 +1932,7 @@ app.post('/:debateId/message', authRequired, async (c) => {
       message: inserted,
       nextTurn: effectiveTurn,
       nextTurnNumber: effectiveTurnNumber,
+      nextTurnStartedAt,
     });
   } catch (error) {
     console.error('Debate message error:', error);
